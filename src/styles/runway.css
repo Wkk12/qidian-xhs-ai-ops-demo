@@ -1,0 +1,52 @@
+/* finesse · register=product · shell=runway-topnav · palette=obsidian+coral · material=smoked-glass */
+.theme-runway {
+  --page: #08090d; --surface: #101116; --panel: #17181f; --panel-two: #202129;
+  --ink: #f4f0f3; --muted: #99949d; --border: rgba(255,255,255,.075); --panel-shadow: rgba(0,0,0,.08);
+  --accent: #ff5f7e; --accent-two: #b7b3c6; --accent-soft: rgba(255,95,126,.13);
+  --positive: #a8c789; --positive-soft: rgba(168,199,137,.12);
+  --sidebar: #101116; --sidebar-ink: #f1edf0; --sidebar-active: rgba(255,95,126,.12); --sidebar-active-ink: #fff6f8; --sidebar-line: rgba(255,255,255,.08);
+  --brand-mark-ink: #210910; --button-bg: #ff5f7e; --button-ink: #210910;
+  --rail-bg: rgba(18,19,25,.88); --rail-ink: #f6f1f4; --rail-active: rgba(255,95,126,.12); --rail-hover: rgba(255,255,255,.05); --rail-index: rgba(255,255,255,.07); --rail-border: rgba(255,255,255,.09); --rail-shadow: rgba(0,0,0,.9);
+  --shell-border: rgba(255,255,255,.07); --shell-shadow: rgba(0,0,0,.9); --shadow: #05060a;
+  --glass-bg: rgba(27,28,35,.72); --glass-border: rgba(255,255,255,.10); --glass-shine: rgba(255,255,255,.08);
+  --visual-bg: #29121b; --visual-soft: #e98a9f; --visual-deep: #6e2035; --visual-halo: rgba(255,95,126,.22); --visual-line: #ffd6df; --visual-caption: rgba(20,10,15,.58);
+  --cover-line: #f8d4db; --cover-rose: #98374f; --cover-wine: #421522; --cover-silver: #484956; --row-hover: rgba(255,95,126,.045);
+  --chart-grid: rgba(255,255,255,.07); --chart-area: rgba(255,95,126,.10);
+  --ai-bg: #21131a; --ai-ink: #fff1f4; --ai-muted: #c8aab2; --ai-accent: #ff5f7e; --ai-soft: rgba(255,95,126,.12); --ai-line: rgba(255,255,255,.10); --ai-button: rgba(255,95,126,.08); --ai-button-ink: #210910; --ai-glow: rgba(255,95,126,.46);
+  --preview-frame: #08090d;
+}
+.theme-runway.demo-stage { background-image: radial-gradient(circle at 78% 5%, rgba(255,95,126,.09), transparent 24%); }
+.theme-runway .app-shell { grid-template-columns: 1fr; }
+.theme-runway .sidebar { min-height: 80px; padding: 15px 24px; display: grid; grid-template-columns: 210px minmax(0, 1fr) 220px; align-items: center; border-bottom: 1px solid var(--sidebar-line); }
+.theme-runway .main-nav { margin: 0; display: flex; justify-content: center; gap: 3px; }
+.theme-runway .nav-item { padding: 0 11px; }
+.theme-runway .main-nav .nav-item:nth-child(n+5) { display: none; }
+.theme-runway .sidebar-foot { margin: 0; display: block; }
+.theme-runway .sidebar-foot > .nav-item { display: none; }
+.theme-runway .account-mini { border: 0; }
+.theme-runway .workspace { padding-top: 22px; }
+.theme-runway .topbar h1 { font-family: "Songti SC", serif; font-weight: 500; }
+.theme-runway .dashboard-grid { grid-template-columns: minmax(0, 1.32fr) minmax(260px, .72fr) minmax(270px, .8fr); grid-template-areas: "spot spot metrics" "trend schedule ai"; }
+.theme-runway .spotlight { grid-area: spot; min-height: 288px; display: grid; grid-template-columns: minmax(0, .9fr) minmax(300px, 1.1fr); }
+.theme-runway .spotlight-copy { padding: 28px 31px; }
+.theme-runway .beauty-visual { order: -1; }
+.theme-runway .metric-zone { grid-area: metrics; grid-template-columns: 1fr; }
+.theme-runway .metric-card { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
+.theme-runway .metric-head { display: contents; }
+.theme-runway .metric-card > small { margin: 0; }
+.theme-runway .metric-card > strong { grid-column: 3; grid-row: 1; }
+.theme-runway .delta { display: none; }
+.theme-runway .trend-card { grid-area: trend; }
+.theme-runway .schedule { grid-area: schedule; }
+.theme-runway .ai-card { grid-area: ai; }
+.theme-runway .post-row { grid-template-columns: 43px 40px minmax(0,1fr) 15px; gap: 8px; }
+.theme-runway .post-state { display: none; }
+.theme-runway .chart-wrap svg { height: 205px; }
+
+@media (max-width: 1320px) {
+  .theme-runway .dashboard-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "spot spot" "metrics metrics" "trend schedule" "ai ai"; }
+  .theme-runway .metric-zone { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1080px) { .theme-runway .main-nav .nav-item span { display: none; }.theme-runway .sidebar { grid-template-columns: 180px 1fr 190px; } }
+@media (max-width: 900px) { .theme-runway .sidebar { display: none; } }
+@media (max-width: 640px) { .theme-runway .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai"; }.theme-runway .spotlight { grid-template-columns: 1fr; }.theme-runway .beauty-visual { order: 0; } }

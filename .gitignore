@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+logs/
+cookies.json
+*cookie*.json
+*.pem
+*.key
+.idea/
+.vscode/
+.finesse/
