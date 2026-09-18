@@ -244,6 +244,58 @@ http://127.0.0.1:5199/            → HTTP 200  转发正常（兼容旧标签�
 
 ---
 
+## T48 前端假按钮与失效引用
+
+**验证时间**：2026-09-18
+
+### 发现的 3 处真 bug
+```
+1) 主按钮「重新生成 7 天草稿」接的是 startGeneration 桩子函数
+   → 只弹「AI 生成功能待接入」，而真函数 runGenerate 早已存在
+2) runGenerate 把结果写进 imgError/imgResult（生图变量）
+   → 内容生成结果显示不出来
+3) 模板引用 imgGenResult —— 该变量在早前重命名中已不存在
+   → 该区域永远渲染不出来（静默失效）
+```
+
+### 2 个假按钮
+```
+「已将 N 张素材加入 D3」  → 只弹提示，不落库
+「本地环境复检完成，4 项全部正常」→ 固定文案，不重跑检测
+```
+
+### 修复后实测（playwright 真实点击）
+```
+把配置调成「1 天 × 1 条」→ 点「重新生成 7 天草稿」→ 等待
+页面显示：本次主线：新手化妆痛点共鸣：从底妆卡粉到有效化妆的认知重建
+         已生成 1 条草稿（2.4 秒，1279 tokens），可在下方查看与编辑。
+stillStub = false   ← 不再出现「待接入」✅
+```
+→ 按钮已真调用 `/api/generate`，耗时 2.4 秒、消耗 1279 tokens，结果真实渲染 ✅
+
+### 新增真功能
+```
+attachSelected()  → 逐张调 POST /api/assets/:id/attach 写 content_id
+                    无目标草稿时提示「先去内容工坊生成，再回来挂图」
+recheckEnv()      → 真调 loadRealStatus()，并按真实结果报「4/4 正常」或红项数
+```
+
+### 变量归属梳理（防再犯）
+```
+内容生成：genResult / genError / genRunning / genDays / genPostsPerDay
+AI 生图　：imgResult / imgError / imgBusy / imgExpanding / imgHistory / imgStatus
+（残留 imgGen* = 0，重复声明 = 0，构建通过）
+```
+
+### 数据清理
+```
+清理测试草稿 id=49 → contents 回到 48 条（46 历史 + 2 生成）
+```
+
+**结论**：✅ 通过（3 处 bug 修复 + 2 个假按钮接真，全部实测）
+
+---
+
 ## T46 Mac Intel 交付适配
 
 **验证时间**：2026-09-18

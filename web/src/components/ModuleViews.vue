@@ -891,8 +891,8 @@ async function syncGenConfig() {
 async function runGenerate() {
   if (genRunning.value) return
   genRunning.value = true
-  imgError.value = ''
-  imgResult.value = null
+  genError.value = ''
+  genResult.value = null
   try {
     const r = await api.generate({
       userIntent: strategyInput.value,
@@ -900,11 +900,11 @@ async function runGenerate() {
       days: genDays.value,
       dryRun: false,
     })
-    imgResult.value = r
+    genResult.value = r
     showNotice(`已生成 ${r.saved} 条草稿（${r.elapsed}s）`)
     await loadContents()
   } catch (e) {
-    imgError.value = '生成失败：' + (e.message || '未知错误')
+    genError.value = '生成失败：' + (e.message || '未知错误')
   } finally {
     genRunning.value = false
   }
@@ -1135,9 +1135,25 @@ const filteredLibrary = computed(() => {
   return rows.filter((item) => `${item.title}${item.topic}${item.status}`.toLowerCase().includes(query))
 })
 
-// AI 生成尚未接入：明确告知，不跑假动画冒充已生成。
-const startGeneration = () => {
-  showNotice('AI 生成功能待接入（需先配置 DeepSeek API Key）。现在可先到「文案库」导入已发笔记。')
+// 把选中的素材真正挂到目标内容上（配图），落库 assets.content_id
+const attachSelected = async () => {
+  if (!selectedAssets.value.length) { showNotice('先选素材'); return }
+  const day = Number(selectedOutlineDay.value)
+  const target = (weeklyContents.value || []).find(
+    (c) => Number(c.dayIndex ?? c.day_index ?? -1) === day,
+  )
+  if (!target?.id) {
+    showNotice(`D${day + 1} 还没有内容草稿 —— 先去「内容工坊」生成，再回来挂图`)
+    return
+  }
+  try {
+    for (const aid of selectedAssets.value) await api.attachAsset(aid, target.id)
+    showNotice(`已把 ${selectedAssets.value.length} 张素材挂到 D${day + 1} 内容上（已落库）`)
+    selectedAssets.value = []
+    await loadAssets()
+  } catch (e) {
+    showNotice('挂图失败：' + (e.message || '未知错误'))
+  }
 }
 
 // 素材卡支持多选，便于演示批量加入内容任务。
@@ -1157,6 +1173,14 @@ const toggleSetting = async (key) => {
   } catch (e) {
     showNotice('保存失败：' + (e.message || '未知错误'))
   }
+}
+
+// 真正重跑一次本机环境检测（不是假提示）
+const recheckEnv = async () => {
+  showNotice('正在重新检测本机环境…')
+  await loadRealStatus()
+  const ok = healthyCount.value
+  showNotice(ok >= 4 ? `复检完成：${ok}/4 项正常` : `复检完成：仅 ${ok}/4 项正常，请查看红项`)
 }
 
 // 轻提示用于确认演示操作已经生效。
@@ -1180,7 +1204,7 @@ onBeforeUnmount(() => {
         <div class="config-pills" aria-label="生成配置">
           <span><b>7</b> 天</span><span><b>1</b> 条/天</span><span><b>6</b> 图/条</span><span><b>图文</b> 类型</span>
         </div>
-        <ElButton class="module-primary" type="primary" round :loading="generating" @click="startGeneration">
+        <ElButton class="module-primary" type="primary" round :loading="genRunning" @click="runGenerate">
           <Sparkles :size="16" />{{ generating ? '正在生成...' : '重新生成 7 天草稿' }}
         </ElButton>
       </div>
@@ -1215,10 +1239,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <p v-if="imgGenError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ imgGenError }}</p>
-      <div v-if="imgGenResult" class="panel" style="padding:14px 18px;margin:0 0 16px">
-        <b>本次主线：{{ imgGenResult.theme }}</b>
-        <p style="margin:6px 0 0;font-size:12px;color:#8b8175">已生成 {{ imgGenResult.saved }} 条草稿（{{ imgGenResult.elapsed }} 秒，{{ (imgResult.usage||{}).total_tokens }} tokens），可在下方查看与编辑。</p>
+      <p v-if="genError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ genError }}</p>
+      <div v-if="genResult" class="panel" style="padding:14px 18px;margin:0 0 16px">
+        <b>本次主线：{{ genResult.theme }}</b>
+        <p style="margin:6px 0 0;font-size:12px;color:#8b8175">已生成 {{ genResult.saved }} 条草稿（{{ genResult.elapsed }} 秒，{{ (genResult.usage||{}).total_tokens }} tokens），可在下方查看与编辑。</p>
       </div>
 
       <!-- ===== 行业热榜（定时抓取 + 手动触发）===== -->
@@ -1418,7 +1442,7 @@ onBeforeUnmount(() => {
         <aside class="selection-card panel">
           <span class="selection-icon"><Layers3 :size="20" /></span><h3>已选择 {{ selectedAssets.length }} 张</h3><p>选择后的素材可以直接加入当前周内容，也可以交给 AI 作为风格参考。</p>
           <div class="mini-stack"><span v-for="id in selectedAssets.slice(0, 4)" :key="id">{{ id }}</span></div>
-          <ElButton class="module-primary" type="primary" round :disabled="!selectedAssets.length" @click="showNotice(`已将 ${selectedAssets.length} 张素材加入 D3`) ">加入 D3 内容</ElButton>
+          <ElButton class="module-primary" type="primary" round :disabled="!selectedAssets.length" @click="attachSelected">加入 D3 内容</ElButton>
         </aside>
       </div>
 
@@ -1451,18 +1475,18 @@ onBeforeUnmount(() => {
         <div v-if="imgExpanded" style="margin-top:12px;padding:10px 12px;background:#faf7f3;border-radius:10px;font-size:12px;line-height:1.8">
           <b>扩写后提示词（实际发给模型的就是这段）：</b><br />{{ imgExpanded }}
         </div>
-        <p v-if="imgGenError" style="margin:10px 0 0;color:#b4544a;font-size:13px">{{ imgGenError }}</p>
+        <p v-if="imgError" style="margin:10px 0 0;color:#b4544a;font-size:13px">{{ imgError }}</p>
       </div>
 
-      <div v-if="imgGenResult" class="panel" style="padding:16px 18px;margin-bottom:16px">
+      <div v-if="imgResult" class="panel" style="padding:16px 18px;margin-bottom:16px">
         <b style="font-size:13px">本次出图结果</b>
         <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
-          <img :src="imgProxy(imgGenResult.url)" alt="" style="width:220px;border-radius:10px" />
+          <img :src="imgProxy(imgResult.url)" alt="" style="width:220px;border-radius:10px" />
           <div style="font-size:12px;line-height:1.9">
-            档位：{{ imgGenResult.tierName }}（{{ imgGenResult.imageSize }}）｜比例 {{ imgGenResult.ratio }}<br />
+            档位：{{ imgResult.tierName }}（{{ imgResult.imageSize }}）｜比例 {{ imgResult.ratio }}<br />
             扩写耗时 {{ (imgResult.spentMsExpand/1000).toFixed(1) }}s ｜ 生图耗时 {{ (imgResult.callMs/1000).toFixed(1) }}s ｜ 合计 {{ (imgResult.spentMsTotal/1000).toFixed(1) }}s<br />
-            已入素材库：#{{ imgGenResult.assetId }}<br />
-            <span style="color:#8b8175">原始需求：{{ imgGenResult.promptRaw }}</span>
+            已入素材库：#{{ imgResult.assetId }}<br />
+            <span style="color:#8b8175">原始需求：{{ imgResult.promptRaw }}</span>
           </div>
         </div>
       </div>
@@ -1775,7 +1799,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="settings-grid">
         <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">CONTENT SAFETY</span><h3>内容与发布保护</h3></div><ShieldCheck :size="19" /></div><div class="setting-rows"><div><span><b>发布前人工确认</b><small>每条内容必须点确认后才能进入队列</small></span><button type="button" aria-label="发布前人工确认" :aria-pressed="systemToggles.review" :class="['switch-control', { active: systemToggles.review }]" @click="toggleSetting('review')"><i /></button></div><div><span><b>相似度超限自动重写</b><small>达到 60% 时最多自动重写 3 次</small></span><button type="button" aria-label="相似度超限自动重写" :aria-pressed="systemToggles.rewrite" :class="['switch-control', { active: systemToggles.rewrite }]" @click="toggleSetting('rewrite')"><i /></button></div><div><span><b>允许无人值守发布</b><small>建议完成首篇引导后再开启</small></span><button type="button" aria-label="允许无人值守发布" :aria-pressed="systemToggles.publish" :class="['switch-control', { active: systemToggles.publish }]" @click="toggleSetting('publish')"><i /></button></div></div></article>
-        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>macOS · 可运行</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="showNotice('本地环境复检完成，4 项全部正常')"><RefreshCw :size="15" />重新检测环境</button></article>
+        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>macOS · 可运行</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</button></article>
       </div>
 
       <!-- ============ 评论自动回复（R14）============ -->

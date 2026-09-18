@@ -30,6 +30,8 @@ export const api = {
   deleteAsset: (id) => req(`/assets/${id}`, { method: 'DELETE' }),
   registerAsset: (payload) => req('/assets/register', { method: 'POST', body: payload }),
 
+  attachAsset: (id, contentId) => req(`/assets/${id}/attach`, { method: 'POST', body: { contentId } }),
+
   // AI 生图（R15）
   imageStatus: () => req('/image/status'),
   expandPrompt: (p) => req('/image/expand', { method: 'POST', body: p }),
