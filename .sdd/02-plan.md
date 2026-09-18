@@ -184,3 +184,37 @@ CREATE INDEX IF NOT EXISTS idx_pub_status  ON publish_tasks(status, scheduled_at
 ├── docs/                      三份客户文档
 └── README.md                  首次使用引导
 ```
+
+---
+
+## 附：接口清单（共 78 个，随代码自动核对）
+
+> 本清单用于防止「代码里有、文档里没写」的漂移（审计曾发现 16 个未文档化接口）。
+> 改动接口时须同步本表并记入 `05-changelog.md`。
+
+**基础设施**（1）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/health` | `index.js` |
+**小红书连接（MCP）**（6）
+| 方法 | 路径 | 实现在 ||---|---|---|| POST | `/api/mcp/detail` | `index.js` || GET | `/api/mcp/me` | `index.js` || GET | `/api/mcp/my-notes` | `index.js` || GET | `/api/mcp/qrcode` | `index.js` || GET | `/api/mcp/search` | `index.js` || GET | `/api/mcp/status` | `index.js` |
+**内容与文案**（4）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/contents` | `index.js` || POST | `/api/contents` | `index.js` || PATCH | `/api/contents/:id` | `index.js` || POST | `/api/notes/import` | `index.js` |
+**AI 生成**（3）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/ai/status` | `index.js` || POST | `/api/generate` | `index.js` || GET | `/api/generate/context` | `index.js` |
+**查重**（2）
+| 方法 | 路径 | 实现在 ||---|---|---|| POST | `/api/duplicate/check` | `index.js` || POST | `/api/duplicate/scan` | `index.js` |
+**生图**（3）
+| 方法 | 路径 | 实现在 ||---|---|---|| POST | `/api/image/expand` | `index.js` || POST | `/api/image/generate` | `index.js` || GET | `/api/image/status` | `index.js` |
+**热榜**（4）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/trends` | `index.js` || GET | `/api/trends/keywords` | `index.js` || POST | `/api/trends/keywords` | `index.js` || POST | `/api/trends/scrape` | `index.js` |
+**发布**（8）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/publish/best-time` | `index.js` || POST | `/api/publish/now` | `index.js` || POST | `/api/publish/precheck` | `index.js` || POST | `/api/publish/schedule` | `index.js` || GET | `/api/publish/tasks` | `index.js` || POST | `/api/publish/tasks/:id/cancel` | `index.js` || POST | `/api/publish/tasks/:id/run` | `index.js` || POST | `/api/publish/tick` | `index.js` |
+**数据**（10）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/creator/overview` | `index.js` || GET | `/api/creator/profile` | `index.js` || GET | `/api/manual-metrics` | `index.js` || POST | `/api/manual-metrics` | `index.js` || DELETE | `/api/manual-metrics/:date` | `index.js` || GET | `/api/metrics` | `index.js` || POST | `/api/metrics/collect` | `index.js` || GET | `/api/report` | `index.js` || POST | `/api/report` | `index.js` || POST | `/api/report/snapshots` | `index.js` |
+**运营配置**（14）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/forbidden-words` | `index.js` || POST | `/api/forbidden-words` | `index.js` || GET | `/api/knowledge` | `index.js` || POST | `/api/knowledge` | `index.js` || GET | `/api/persona` | `index.js` || POST | `/api/persona` | `index.js` || GET | `/api/plan-config` | `index.js` || POST | `/api/plan-config` | `index.js` || GET | `/api/plans` | `index.js` || POST | `/api/plans` | `index.js` || GET | `/api/positioning` | `index.js` || POST | `/api/positioning` | `index.js` || GET | `/api/settings` | `index.js` || POST | `/api/settings` | `index.js` |
+**对标账号**（7）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/competitors` | `index.js` || POST | `/api/competitors` | `index.js` || DELETE | `/api/competitors/:id` | `index.js` || POST | `/api/competitors/:id/analyze` | `index.js` || POST | `/api/competitors/:id/deep-analyze` | `index.js` || POST | `/api/competitors/discover` | `index.js` || POST | `/api/competitors/enrich` | `index.js` |
+**评论回复**（10）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/comments` | `index.js` || POST | `/api/comments/:id/approve` | `index.js` || POST | `/api/comments/:id/reply` | `index.js` || GET | `/api/comments/list` | `index.js` || POST | `/api/comments/match-test` | `index.js` || POST | `/api/comments/poll` | `index.js` || GET | `/api/comments/stats` | `index.js` || GET | `/api/takeover` | `index.js` || POST | `/api/takeover` | `index.js` || DELETE | `/api/takeover/:userId` | `index.js` |
+**素材**（6）
+| 方法 | 路径 | 实现在 ||---|---|---|| GET | `/api/assets` | `assets.js` || DELETE | `/api/assets/:id` | `assets.js` || POST | `/api/assets/:id/attach` | `assets.js` || POST | `/api/assets/register` | `assets.js` || POST | `/api/assets/upload` | `assets.js` || GET | `/api/img` | `index.js` |
