@@ -1,0 +1,32 @@
+/* finesse · register=product · shell=editorial-sidebar · palette=porcelain+cherry · material=satin-paper · gate=originality+story-arc */
+.theme-atelier {
+  --page: #e8e0dc; --surface: #f8f4f1; --panel: #fdfaf7; --panel-two: #f3ebe8;
+  --ink: #2c2228; --muted: #81737a; --border: rgba(75, 43, 57, .09); --panel-shadow: rgba(68, 34, 50, .05);
+  --accent: #a4294b; --accent-two: #d99389; --accent-soft: rgba(164, 41, 75, .10);
+  --positive: #617449; --positive-soft: rgba(97, 116, 73, .12);
+  --sidebar: #32232c; --sidebar-ink: #f4e9ed; --sidebar-active: rgba(255, 240, 245, .10); --sidebar-active-ink: #fff7fa; --sidebar-line: rgba(255,255,255,.09);
+  --brand-mark-ink: #fff6f8; --button-bg: #30212a; --button-ink: #fff8fa;
+  --rail-bg: rgba(48, 33, 42, .94); --rail-ink: #f7edf1; --rail-active: rgba(255,255,255,.10); --rail-hover: rgba(255,255,255,.06); --rail-index: rgba(255,255,255,.08); --rail-border: rgba(255,255,255,.10); --rail-shadow: rgba(52, 29, 41, .75);
+  --shell-border: rgba(82, 48, 62, .09); --shell-shadow: rgba(70, 43, 52, .46); --shadow: #513744;
+  --glass-bg: rgba(253, 248, 246, .72); --glass-border: rgba(96, 55, 72, .10); --glass-shine: rgba(255,255,255,.68);
+  --visual-bg: #ead7d7; --visual-soft: #f0c9c0; --visual-deep: #c87f82; --visual-halo: rgba(255, 239, 229, .85); --visual-line: #713d51; --visual-caption: rgba(255, 247, 245, .68);
+  --cover-line: #633747; --cover-rose: #e9bdc2; --cover-wine: #a55a6b; --cover-silver: #d7d0d1; --row-hover: rgba(164,41,75,.035);
+  --chart-grid: rgba(89,56,69,.10); --chart-area: rgba(164,41,75,.09);
+  --ai-bg: #32232c; --ai-ink: #fff5f8; --ai-muted: #cdbbc3; --ai-accent: #dba5ae; --ai-soft: rgba(219,165,174,.10); --ai-line: rgba(255,255,255,.10); --ai-button: rgba(255,255,255,.06); --ai-button-ink: #422432; --ai-glow: rgba(164,41,75,.55);
+  --preview-frame: #32232c;
+}
+.theme-atelier .app-shell { grid-template-columns: 218px minmax(0, 1fr); }
+.theme-atelier .dashboard-grid { grid-template-columns: minmax(0, 1.48fr) minmax(280px, .85fr); grid-template-areas: "spot metrics" "schedule trend" "schedule ai"; }
+.theme-atelier .spotlight { grid-area: spot; min-height: 318px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(250px, .95fr); }
+.theme-atelier .spotlight-copy { padding: 28px; }
+.theme-atelier .metric-zone { grid-area: metrics; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.theme-atelier .schedule { grid-area: schedule; }
+.theme-atelier .trend-card { grid-area: trend; }
+.theme-atelier .ai-card { grid-area: ai; }
+
+@media (max-width: 1180px) {
+  .theme-atelier .app-shell { grid-template-columns: 192px minmax(0, 1fr); }
+  .theme-atelier .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai"; }
+}
+@media (max-width: 900px) { .theme-atelier .app-shell { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .theme-atelier .spotlight { grid-template-columns: 1fr; }.theme-atelier .beauty-visual { min-height: 250px; } }
