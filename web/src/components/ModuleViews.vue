@@ -329,7 +329,7 @@ async function loadContents() {
 // watch 默认不捕获初始值 → 必须 immediate:true，否则首次进入不加载数据。
 const onViewChange = (v) => {
   if (v === 'settings') { loadRealStatus(); loadComments() }
-  if (v === 'assets') loadAssets()
+  if (v === 'assets') { loadAssets(); api.imageStatus().then(r => { imgStatus.value = r }).catch(() => {}) }
   if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadManual() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
   if (v === 'library') loadLibrary()
@@ -380,6 +380,56 @@ function imgProxy(u) {
   if (!u) return ''
   if (u.startsWith('/') || u.startsWith('data:')) return u
   return '/api/img?url=' + encodeURIComponent(u)
+}
+
+/* -------- AI 生图两档（R15） -------- */
+const imgForm = ref({ prompt: '', tier: 'standard', ratio: '1:1', contentId: '' })
+const imgBusy = ref(false)
+const imgExpanding = ref(false)
+const imgResult = ref(null)
+const imgExpanded = ref('')
+const imgError = ref('')
+const imgHistory = ref([])
+const imgStatus = ref(null)
+
+async function expandImgPrompt() {
+  if (!imgForm.value.prompt.trim()) { showNotice('先写一句需求'); return }
+  imgExpanding.value = true
+  imgError.value = ''
+  try {
+    const r = await api.expandPrompt({ prompt: imgForm.value.prompt })
+    imgExpanded.value = r.expanded
+    showNotice('已扩写（这一步不花生图费用）')
+  } catch (e) {
+    imgError.value = '扩写失败：' + (e.message || '')
+  } finally {
+    imgExpanding.value = false
+  }
+}
+
+async function runImgGen() {
+  const prompt = (imgExpanded.value || imgForm.value.prompt || '').trim()
+  if (!prompt) { showNotice('先写需求或先扩写提示词'); return }
+  if (!window.confirm(`确认用「${imgForm.value.tier === 'fine' ? '精细档(4K)' : '标准档(2K)'}」生成 1 张图？\n会产生真实 API 费用。`)) return
+  imgBusy.value = true
+  imgError.value = ''
+  imgResult.value = null
+  try {
+    const r = await api.generateImage({
+      prompt,
+      tier: imgForm.value.tier,
+      ratio: imgForm.value.ratio,
+      contentId: imgForm.value.contentId ? Number(imgForm.value.contentId) : null,
+    })
+    imgResult.value = r
+    imgHistory.value.unshift(r)
+    showNotice(`出图完成：${r.tierName} ${r.imageSize}，耗时 ${(r.spentMsTotal / 1000).toFixed(0)} 秒`)
+    await loadAssets()
+  } catch (e) {
+    imgError.value = '出图失败：' + (e.message || '')
+  } finally {
+    imgBusy.value = false
+  }
 }
 
 /* -------- 评论自动回复（R14） -------- */
@@ -841,8 +891,8 @@ async function syncGenConfig() {
 async function runGenerate() {
   if (genRunning.value) return
   genRunning.value = true
-  genError.value = ''
-  genResult.value = null
+  imgError.value = ''
+  imgResult.value = null
   try {
     const r = await api.generate({
       userIntent: strategyInput.value,
@@ -850,11 +900,11 @@ async function runGenerate() {
       days: genDays.value,
       dryRun: false,
     })
-    genResult.value = r
+    imgResult.value = r
     showNotice(`已生成 ${r.saved} 条草稿（${r.elapsed}s）`)
     await loadContents()
   } catch (e) {
-    genError.value = '生成失败：' + (e.message || '未知错误')
+    imgError.value = '生成失败：' + (e.message || '未知错误')
   } finally {
     genRunning.value = false
   }
@@ -1165,10 +1215,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <p v-if="genError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ genError }}</p>
-      <div v-if="genResult" class="panel" style="padding:14px 18px;margin:0 0 16px">
-        <b>本次主线：{{ genResult.theme }}</b>
-        <p style="margin:6px 0 0;font-size:12px;color:#8b8175">已生成 {{ genResult.saved }} 条草稿（{{ genResult.elapsed }} 秒，{{ (genResult.usage||{}).total_tokens }} tokens），可在下方查看与编辑。</p>
+      <p v-if="imgGenError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ imgGenError }}</p>
+      <div v-if="imgGenResult" class="panel" style="padding:14px 18px;margin:0 0 16px">
+        <b>本次主线：{{ imgGenResult.theme }}</b>
+        <p style="margin:6px 0 0;font-size:12px;color:#8b8175">已生成 {{ imgGenResult.saved }} 条草稿（{{ imgGenResult.elapsed }} 秒，{{ (imgResult.usage||{}).total_tokens }} tokens），可在下方查看与编辑。</p>
       </div>
 
       <!-- ===== 行业热榜（定时抓取 + 手动触发）===== -->
@@ -1370,6 +1420,58 @@ onBeforeUnmount(() => {
           <div class="mini-stack"><span v-for="id in selectedAssets.slice(0, 4)" :key="id">{{ id }}</span></div>
           <ElButton class="module-primary" type="primary" round :disabled="!selectedAssets.length" @click="showNotice(`已将 ${selectedAssets.length} 张素材加入 D3`) ">加入 D3 内容</ElButton>
         </aside>
+      </div>
+
+      <!-- ===== AI 生图两档（R15）===== -->
+      <article class="module-toolbar panel" style="margin-top:16px">
+        <div><span class="section-label">AI IMAGE GEN</span><h2>AI 生图（两档）</h2>
+        <p>提示词一律先经 DeepSeek 扩写再出图（避免直出原始提示词）；产物自动进素材库</p></div>
+      </article>
+
+      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175;flex:1;min-width:240px">需求（一句话即可）
+            <input v-model="imgForm.prompt" placeholder="例：美容院海报配图，一位女性在护理" style="padding:9px 11px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175">档位
+            <select v-model="imgForm.tier" style="padding:8px 10px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px;background:#fff">
+              <option value="standard">标准档（2K，快）</option>
+              <option value="fine">精细档（4K，细节好）</option>
+            </select>
+          </label>
+          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175">比例
+            <select v-model="imgForm.ratio" style="padding:8px 10px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px;background:#fff">
+              <option v-for="r in ['1:1','2:3','3:4','4:3','3:2','9:16','16:9','4:5']" :key="'r'+r" :value="r">{{ r }}</option>
+            </select>
+          </label>
+          <button class="outline-button" type="button" :disabled="imgExpanding" @click="expandImgPrompt">{{ imgExpanding ? '扩写中…' : '先扩写提示词' }}</button>
+          <button class="outline-button" type="button" :disabled="imgBusy" @click="runImgGen">{{ imgBusy ? '出图中…（约1分钟）' : '生成图片' }}</button>
+        </div>
+
+        <div v-if="imgExpanded" style="margin-top:12px;padding:10px 12px;background:#faf7f3;border-radius:10px;font-size:12px;line-height:1.8">
+          <b>扩写后提示词（实际发给模型的就是这段）：</b><br />{{ imgExpanded }}
+        </div>
+        <p v-if="imgGenError" style="margin:10px 0 0;color:#b4544a;font-size:13px">{{ imgGenError }}</p>
+      </div>
+
+      <div v-if="imgGenResult" class="panel" style="padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:13px">本次出图结果</b>
+        <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
+          <img :src="imgProxy(imgGenResult.url)" alt="" style="width:220px;border-radius:10px" />
+          <div style="font-size:12px;line-height:1.9">
+            档位：{{ imgGenResult.tierName }}（{{ imgGenResult.imageSize }}）｜比例 {{ imgGenResult.ratio }}<br />
+            扩写耗时 {{ (imgResult.spentMsExpand/1000).toFixed(1) }}s ｜ 生图耗时 {{ (imgResult.callMs/1000).toFixed(1) }}s ｜ 合计 {{ (imgResult.spentMsTotal/1000).toFixed(1) }}s<br />
+            已入素材库：#{{ imgGenResult.assetId }}<br />
+            <span style="color:#8b8175">原始需求：{{ imgGenResult.promptRaw }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="imgHistory.length > 1" class="panel" style="padding:14px 18px;margin-bottom:16px">
+        <b style="font-size:12px">本次会话历史（{{ imgHistory.length }} 张）</b>
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          <img v-for="(g,i) in imgHistory.slice(0,10)" :key="'gh'+i" :src="imgProxy(g.url)" style="width:88px;height:88px;object-fit:cover;border-radius:8px" />
+        </div>
       </div>
     </template>
 

@@ -15,6 +15,7 @@ import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
 import { collectSnapshots, buildReport } from './report.js';
+import { generateImage, expandPrompt, imagegenReady, TIERS } from './imagegen.js';
 import {
   getPersona, setPersona, getForbidden, setForbidden, pollOnce, startPoller,
   listComments, approveComment, manualReply, statsComments,
@@ -241,6 +242,27 @@ app.get('/api/img', async (req, reply) => {
   reply.header('Content-Type', r.headers.get('content-type') || 'image/jpeg');
   reply.header('Cache-Control', 'public, max-age=86400');
   return reply.send(buf);
+});
+
+// ---------- AI 生图两档（R15） ----------
+app.get('/api/image/status', async () => ({ ok: true, ...imagegenReady(), tiers: TIERS }));
+
+// 只扩写提示词（不花生图钱，便于预览效果）
+app.post('/api/image/expand', async (req) => {
+  const b = req.body || {};
+  const e = await expandPrompt(b.prompt || '', { style: b.style || '' });
+  return { ok: true, ...e };
+});
+
+// 出图（会产生真实费用）
+app.post('/api/image/generate', async (req) => {
+  const b = req.body || {};
+  return generateImage({
+    prompt: b.prompt || '',
+    tier: b.tier === 'fine' ? 'fine' : 'standard',
+    ratio: b.ratio || '1:1',
+    contentId: b.contentId || null,
+  });
 });
 
 // ---------- 评论自动回复（R14） ----------
