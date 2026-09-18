@@ -30,6 +30,11 @@ export const api = {
   deleteAsset: (id) => req(`/assets/${id}`, { method: 'DELETE' }),
   registerAsset: (payload) => req('/assets/register', { method: 'POST', body: payload }),
 
+  // 复盘报告（R12）
+  report: () => req('/report?days=30'),
+  buildReport: (p) => req('/report', { method: 'POST', body: p || {} }),
+  collectSnapshots: () => req('/report/snapshots', { method: 'POST', body: {} }),
+
   // 对标账号监控（R11）
   competitors: () => req('/competitors'),
   discoverCompetitors: (p) => req('/competitors/discover', { method: 'POST', body: p || {} }),

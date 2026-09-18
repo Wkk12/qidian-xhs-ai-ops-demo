@@ -129,6 +129,20 @@ CREATE TABLE IF NOT EXISTS publish_tasks (
   updated_at  TEXT
 );
 
+-- 发布后 24/48/72 小时快照（R12 复盘用）
+CREATE TABLE IF NOT EXISTS snapshots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_id  INTEGER,
+  note_id     TEXT,
+  age_hours   INTEGER,          -- 24 / 48 / 72
+  captured_at TEXT,
+  likes       INTEGER DEFAULT 0,
+  collects    INTEGER DEFAULT 0,
+  comments    INTEGER DEFAULT 0,
+  is_proxy    INTEGER DEFAULT 0  -- 1=发布时间用 updated_at 代理（历史导入无真实发布时间）
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snap_uniq ON snapshots(content_id, age_hours);
+
 -- 指标快照（P7，M4 数据分析）
 CREATE TABLE IF NOT EXISTS metrics (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

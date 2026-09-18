@@ -14,6 +14,7 @@ import { mcp, extractMetrics } from './mcp.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
+import { collectSnapshots, buildReport } from './report.js';
 import { discover, analyzeAuthor, analyzeAll, listCompetitors, addCompetitor, removeCompetitor, enrich, enrichTimes } from './competitors.js';
 import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick } from './publish.js';
 import { deepseekReady, deepseekInfo } from './deepseek.js';
@@ -235,6 +236,17 @@ app.get('/api/img', async (req, reply) => {
   reply.header('Content-Type', r.headers.get('content-type') || 'image/jpeg');
   reply.header('Cache-Control', 'public, max-age=86400');
   return reply.send(buf);
+});
+
+// ---------- 复盘报告与建议（R12） ----------
+app.post('/api/report/snapshots', async () => collectSnapshots());
+app.get('/api/report', async (req) => {
+  const q = req.query || {};
+  return buildReport({ days: Number(q.days) || 30, useAI: q.ai !== '0' });
+});
+app.post('/api/report', async (req) => {
+  const b = req.body || {};
+  return buildReport({ days: Number(b.days) || 30, useAI: b.useAI !== false });
 });
 
 // ---------- 对标账号监控（R11） ----------

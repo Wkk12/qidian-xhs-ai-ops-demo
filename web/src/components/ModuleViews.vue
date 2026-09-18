@@ -382,6 +382,38 @@ function imgProxy(u) {
   return '/api/img?url=' + encodeURIComponent(u)
 }
 
+/* -------- 复盘报告与建议（R12） -------- */
+const report = ref(null)
+const reportLoading = ref(false)
+const reportError = ref('')
+const snapshotBusy = ref(false)
+
+async function loadReport() {
+  reportLoading.value = true
+  reportError.value = ''
+  try {
+    const r = await api.buildReport({ days: 30, useAI: true })
+    report.value = r
+  } catch (e) {
+    reportError.value = '生成复盘失败：' + (e.message || '')
+  } finally {
+    reportLoading.value = false
+  }
+}
+
+async function collectSnapshotNow() {
+  snapshotBusy.value = true
+  try {
+    const r = await api.collectSnapshots()
+    showNotice(`快照采集完成：扫描 ${r.scanned} 篇，更新 ${r.updated} 条`)
+    await loadReport()
+  } catch (e) {
+    showNotice('采集失败：' + (e.message || ''))
+  } finally {
+    snapshotBusy.value = false
+  }
+}
+
 /* -------- 对标账号监控（R11） -------- */
 const competitors = ref([])
 const compLoading = ref(false)
@@ -1232,7 +1264,75 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </div>
-      <article class="strategy-card panel"><span class="strategy-orb"><Sparkles :size="19" /></span><div><span class="section-label">今日复盘建议</span><h3>AI 复盘建议待接入</h3><p>接入 DeepSeek 后，这里会根据账号真实笔记数据给出选题、发布时间与内容切口建议，并联动调整后续几天的大纲。</p></div><button type="button" @click="showNotice('复盘建议功能待接入（需先配置 DeepSeek API Key）')">应用到后续大纲 <ArrowRight :size="15" /></button></article>
+      <!-- ===== 复盘报告与建议（R12）===== -->
+      <article class="strategy-card panel" style="margin-top:16px">
+        <span class="strategy-orb"><Sparkles :size="19" /></span>
+        <div style="flex:1">
+          <span class="section-label">AI REVIEW · 复盘报告</span>
+          <h3 v-if="!report && !reportLoading">生成账号复盘</h3>
+          <h3 v-else-if="reportLoading">正在分析…</h3>
+          <h3 v-else-if="report && report.status === 'collecting'">{{ report.note }}</h3>
+          <h3 v-else-if="report">判据：{{ report.metricUsed.name }}（样本 {{ report.sampleSize }} 篇）</h3>
+          <p v-if="!report && !reportLoading">按发布后 24/48/72 小时快照做复盘，输出「本期表现 / 与上期对比 / 支柱调整 / 可执行建议」。</p>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" :disabled="snapshotBusy" @click="collectSnapshotNow">{{ snapshotBusy ? '采集中…' : '采集快照' }}</button>
+          <button type="button" :disabled="reportLoading" @click="loadReport">{{ reportLoading ? '分析中…' : '生成复盘' }}</button>
+        </div>
+      </article>
+
+      <p v-if="reportError" class="panel" style="padding:12px 16px;margin-top:12px">{{ reportError }}</p>
+
+      <div v-if="report && report.status === 'ready'" class="panel" style="padding:16px 18px;margin-top:14px;font-size:13px">
+        <div v-if="report.warnings && report.warnings.length" style="margin-bottom:10px;color:#b4544a;font-size:12px">
+          <div v-for="(w,i) in report.warnings" :key="'w'+i">⚠️ {{ w }}</div>
+        </div>
+
+        <b>① 本期表现（{{ report.period.from }} ~ {{ report.period.to }}）</b>
+        <div style="margin:6px 0 12px;line-height:1.9">
+          篇数 {{ report.current.count }} ｜ 平均点赞 {{ report.current.avgLikes }} ｜
+          评论率 {{ report.current.commentRate }}% ｜ 收藏率 {{ report.current.collectRate }}%
+          <div style="color:#8b8175">
+            基准（全量 {{ report.baseline.count }} 篇）：均值 {{ report.baseline.avgLikes }} 赞 ｜
+            优于 ≥{{ report.baseline.upThreshold }} ｜ 低于 ≤{{ report.baseline.downThreshold }}
+          </div>
+        </div>
+
+        <b>② 与上期对比</b>
+        <div style="margin:6px 0 12px;line-height:1.9">
+          <template v-if="report.previous">
+            上期 {{ report.previous.count }} 篇 · 平均点赞 {{ report.previous.avgLikes }} → 本期 {{ report.current.avgLikes }}
+          </template>
+          <template v-else><span style="color:#8b8175">上期无样本（系统刚上线，数据积累中）</span></template>
+          <div style="color:#8b8175">判定：优于 {{ report.verdicts.better }} 篇 / 低于 {{ report.verdicts.worse }} 篇 / 持平 {{ report.verdicts.flat }} 篇</div>
+        </div>
+
+        <b>③ 支柱调整（±10%）</b>
+        <div style="margin:6px 0 12px">
+          <div v-for="p in report.pillarAdjust" :key="'pa'+p.name" style="display:flex;align-items:center;gap:10px;margin:4px 0">
+            <span style="flex:0 0 150px">{{ p.name }}</span>
+            <span style="color:#8b8175">{{ p.current }}% →</span>
+            <b :style="p.delta > 0 ? 'color:#5a8a6a' : (p.delta < 0 ? 'color:#b4544a' : '')">{{ p.suggested }}%（{{ p.delta > 0 ? '+' : '' }}{{ p.delta }}）</b>
+            <i style="flex:1;height:6px;background:#f0ebe3;border-radius:3px;overflow:hidden;display:block">
+              <em :style="{ display:'block', height:'100%', width: p.suggested + '%', background:'#c8a68a' }" />
+            </i>
+          </div>
+          <small style="color:#8b8175">支柱来源：{{ report.pillarSource }}</small>
+        </div>
+
+        <b>④ 可执行建议</b>
+        <ol style="margin:6px 0 12px;padding-left:20px;line-height:1.9">
+          <li v-for="(s,i) in report.suggestions" :key="'sg'+i">
+            <b>改「{{ s.what }}」→「{{ s.to }}」</b>
+            <div style="color:#8b8175;font-size:12px">依据：{{ s.because }}</div>
+          </li>
+        </ol>
+
+        <div v-if="report.aiSummary" style="padding:10px 12px;background:#faf7f3;border-radius:10px;line-height:1.8">
+          <b>AI 总结：</b>{{ report.aiSummary }}
+        </div>
+        <small v-if="report.aiError" style="color:#b4544a">AI 总结失败：{{ report.aiError }}（结构化报告仍可用）</small>
+      </div>
 
       <!-- ===== 对标账号监控（R11）===== -->
       <article class="module-toolbar panel" style="margin-top:16px">
