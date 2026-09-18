@@ -28,6 +28,9 @@ function migrate(d) {
     }
   };
   add('trends', 'xsec_token', 'TEXT');
+  add('comments', 'note_title', 'TEXT');
+  add('comments', 'user_id', 'TEXT');
+  add('comments', 'skip_reason', 'TEXT');
 }
 migrate(db);
 
@@ -181,6 +184,9 @@ CREATE TABLE IF NOT EXISTS comments (
   replied     INTEGER DEFAULT 0,
   reply_text  TEXT,
   reply_status TEXT,          -- auto | manual | pending_review | skipped
+  note_title  TEXT,
+  user_id     TEXT,
+  skip_reason TEXT,
   created_at  TEXT
 );
 

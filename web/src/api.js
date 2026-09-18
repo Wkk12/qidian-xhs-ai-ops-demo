@@ -30,6 +30,23 @@ export const api = {
   deleteAsset: (id) => req(`/assets/${id}`, { method: 'DELETE' }),
   registerAsset: (payload) => req('/assets/register', { method: 'POST', body: payload }),
 
+  // 评论自动回复（R14）
+  commentStats: () => req('/comments/stats'),
+  commentList: (status) => req('/comments/list' + (status ? `?status=${status}` : '')),
+  pollComments: (limit) => req('/comments/poll', { method: 'POST', body: { limit: limit || 20 } }),
+  approveComment: (id) => req(`/comments/${id}/approve`, { method: 'POST', body: {} }),
+  replyCommentManual: (id, text) => req(`/comments/${id}/reply`, { method: 'POST', body: { text } }),
+  matchTest: (text) => req('/comments/match-test', { method: 'POST', body: { text } }),
+  persona: () => req('/persona'),
+  savePersona: (p) => req('/persona', { method: 'POST', body: p }),
+  forbiddenWords: () => req('/forbidden-words'),
+  saveForbiddenWords: (words) => req('/forbidden-words', { method: 'POST', body: { words } }),
+  knowledge: () => req('/knowledge'),
+  addKnowledge: (p) => req('/knowledge', { method: 'POST', body: p }),
+  takeoverList: () => req('/takeover'),
+  addTakeover: (p) => req('/takeover', { method: 'POST', body: p }),
+  removeTakeover: (userId) => req(`/takeover/${userId}`, { method: 'DELETE' }),
+
   // 手工填报（R13）
   manualMetrics: (days) => req(`/manual-metrics?days=${days || 30}`),
   saveManualMetrics: (p) => req('/manual-metrics', { method: 'POST', body: p }),

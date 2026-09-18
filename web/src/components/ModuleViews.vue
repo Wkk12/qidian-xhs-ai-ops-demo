@@ -328,7 +328,7 @@ async function loadContents() {
 // 注意：ModuleViews 由 App.vue 的 v-else 挂载，首次进入某模块时组件刚挂载，
 // watch 默认不捕获初始值 → 必须 immediate:true，否则首次进入不加载数据。
 const onViewChange = (v) => {
-  if (v === 'settings') loadRealStatus()
+  if (v === 'settings') { loadRealStatus(); loadComments() }
   if (v === 'assets') loadAssets()
   if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadManual() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
@@ -380,6 +380,101 @@ function imgProxy(u) {
   if (!u) return ''
   if (u.startsWith('/') || u.startsWith('data:')) return u
   return '/api/img?url=' + encodeURIComponent(u)
+}
+
+/* -------- 评论自动回复（R14） -------- */
+const commentStats = ref(null)
+const commentList = ref([])
+const commentFilter = ref('pending_review')
+const commentBusy = ref(false)
+const personaCard = ref(null)
+const forbiddenText = ref('')
+const knowledgeItems = ref([])
+const knowledgeForm = ref({ category: '', question: '', answer: '', keywords: '' })
+const takeoverItems = ref([])
+const manualReplyText = ref({})
+
+const COMMENT_STATE = { auto: '自动回复', manual: '人工回复', pending_review: '待人工', skipped: '已跳过' }
+
+async function loadComments() {
+  commentBusy.value = true
+  try {
+    const [s, l, p, f, k, t] = await Promise.all([
+      api.commentStats(), api.commentList(commentFilter.value || undefined),
+      api.persona(), api.forbiddenWords(), api.knowledge(), api.takeoverList(),
+    ])
+    commentStats.value = s.stats
+    commentList.value = l.items || []
+    personaCard.value = p.persona
+    forbiddenText.value = (f.words || []).join(' ')
+    knowledgeItems.value = k.items || []
+    takeoverItems.value = t.items || []
+  } catch (e) {
+    showNotice('读取评论配置失败：' + (e.message || ''))
+  } finally {
+    commentBusy.value = false
+  }
+}
+
+async function switchCommentFilter(v) { commentFilter.value = v; await loadComments() }
+
+async function pollCommentsNow() {
+  commentBusy.value = true
+  try {
+    const r = await api.pollComments(20)
+    showNotice(`已拉取 ${r.fetched} 条，处理 ${r.handled} 条` + (r.byDecision ? `（${Object.entries(r.byDecision).map(([k, v]) => k + ' ' + v).join('、')}）` : ''))
+    await loadComments()
+  } catch (e) { showNotice('轮询失败：' + (e.message || '')) } finally { commentBusy.value = false }
+}
+
+async function approveReply(c) {
+  if (!window.confirm('确认把这条回复发送到小红书？')) return
+  try { await api.approveComment(c.id); showNotice('已发送'); await loadComments() }
+  catch (e) { showNotice('发送失败：' + (e.message || '')) }
+}
+
+async function sendManualReply(c) {
+  const text = (manualReplyText.value[c.id] || '').trim()
+  if (!text) { showNotice('先填写回复内容'); return }
+  try {
+    await api.replyCommentManual(c.id, text)
+    showNotice('已发送，并已把该用户加入人工介入名单')
+    manualReplyText.value[c.id] = ''
+    await loadComments()
+  } catch (e) { showNotice('发送失败：' + (e.message || '')) }
+}
+
+async function addTakeoverByUser(c) {
+  try { await api.addTakeover({ userId: c.user_id, nickname: c.user_name, reason: '手动加入' }); showNotice('已加入人工介入名单'); await loadComments() }
+  catch (e) { showNotice('失败：' + (e.message || '')) }
+}
+
+async function removeTakeoverItem(userId) {
+  try { await api.removeTakeover(userId); await loadComments() } catch (e) { showNotice('失败：' + (e.message || '')) }
+}
+
+async function savePersonaCard() {
+  try { await api.savePersona(personaCard.value); showNotice('人设卡已保存') } catch (e) { showNotice('保存失败：' + (e.message || '')) }
+}
+
+async function saveForbidden() {
+  const words = forbiddenText.value.split(/[\s,，]+/).filter(Boolean)
+  try { await api.saveForbiddenWords(words); showNotice(`已保存 ${words.length} 个禁用词`) } catch (e) { showNotice('保存失败：' + (e.message || '')) }
+}
+
+async function addKnowledgeItem() {
+  if (!knowledgeForm.value.question && !knowledgeForm.value.answer) { showNotice('问题和答案至少填一个'); return }
+  try {
+    await api.addKnowledge({
+      category: knowledgeForm.value.category,
+      question: knowledgeForm.value.question,
+      answer: knowledgeForm.value.answer,
+      keywords: knowledgeForm.value.keywords.split(/[\s,，]+/).filter(Boolean),
+    })
+    showNotice('已加入知识库')
+    knowledgeForm.value = { category: '', question: '', answer: '', keywords: '' }
+    await loadComments()
+  } catch (e) { showNotice('添加失败：' + (e.message || '')) }
 }
 
 /* -------- 手工填报（R13：咨询数/到店数） -------- */
@@ -1579,6 +1674,121 @@ onBeforeUnmount(() => {
       <div class="settings-grid">
         <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">CONTENT SAFETY</span><h3>内容与发布保护</h3></div><ShieldCheck :size="19" /></div><div class="setting-rows"><div><span><b>发布前人工确认</b><small>每条内容必须点确认后才能进入队列</small></span><button type="button" aria-label="发布前人工确认" :aria-pressed="systemToggles.review" :class="['switch-control', { active: systemToggles.review }]" @click="toggleSetting('review')"><i /></button></div><div><span><b>相似度超限自动重写</b><small>达到 60% 时最多自动重写 3 次</small></span><button type="button" aria-label="相似度超限自动重写" :aria-pressed="systemToggles.rewrite" :class="['switch-control', { active: systemToggles.rewrite }]" @click="toggleSetting('rewrite')"><i /></button></div><div><span><b>允许无人值守发布</b><small>建议完成首篇引导后再开启</small></span><button type="button" aria-label="允许无人值守发布" :aria-pressed="systemToggles.publish" :class="['switch-control', { active: systemToggles.publish }]" @click="toggleSetting('publish')"><i /></button></div></div></article>
         <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>macOS · 可运行</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="showNotice('本地环境复检完成，4 项全部正常')"><RefreshCw :size="15" />重新检测环境</button></article>
+      </div>
+
+      <!-- ============ 评论自动回复（R14）============ -->
+      <article class="module-toolbar panel" style="margin-top:16px">
+        <div><span class="section-label">COMMENT AUTO-REPLY</span><h2>评论自动回复</h2>
+        <p>后台每 5 分钟纯规则轮询；命中知识库才用 AI 生成回复，未命中进人工待办</p></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="outline-button" type="button" :disabled="commentBusy" @click="pollCommentsNow">{{ commentBusy ? '处理中…' : '立即跑一轮' }}</button>
+          <button class="outline-button" type="button" @click="loadComments">刷新</button>
+        </div>
+      </article>
+
+      <div v-if="commentStats" class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px">
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:center">
+          <div><span class="section-label">总计</span><b style="font-size:17px">{{ commentStats.total }}</b></div>
+          <div><span class="section-label">待人工</span><b style="font-size:17px">{{ commentStats.pending_review || 0 }}</b></div>
+          <div><span class="section-label">自动回复</span><b style="font-size:17px">{{ commentStats.auto || 0 }}</b></div>
+          <div><span class="section-label">人工回复</span><b style="font-size:17px">{{ commentStats.manual || 0 }}</b></div>
+          <div><span class="section-label">已跳过</span><b style="font-size:17px">{{ commentStats.skipped || 0 }}</b></div>
+          <div style="margin-left:auto;text-align:right">
+            <span class="section-label">观察期</span>
+            <b :style="commentStats.inObservation ? 'color:#b4544a' : 'color:#5a8a6a'">
+              {{ commentStats.inObservation ? '进行中（至 ' + commentStats.observationUntil + '）' : '已结束' }}
+            </b>
+            <div style="color:#8b8175;font-size:12px">观察期内所有回复需人工复核后才发送</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 待办 -->
+      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <b style="font-size:13px">评论处理</b>
+          <div style="display:flex;gap:6px">
+            <button v-for="f in [['pending_review','待人工'],['auto','自动'],['manual','人工'],['skipped','已跳过'],['','全部']]" :key="'cf'+f[0]"
+                    type="button" :style="commentFilter === f[0] ? 'color:#b4544a' : ''" @click="switchCommentFilter(f[0])">{{ f[1] }}</button>
+          </div>
+        </div>
+        <div v-if="!commentList.length" style="color:#8b8175;font-size:13px">没有该状态的评论记录</div>
+        <div v-for="c in commentList" :key="'cm' + c.id" style="border-top:1px solid #f0ebe3;padding:10px 0;font-size:13px">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div style="flex:1;min-width:260px">
+              <b>{{ c.user_name || '(匿名)' }}</b>
+              <span style="color:#8b8175"> · {{ c.note_title || c.note_id }}</span>
+              <div style="margin-top:4px">💬 {{ c.content }}</div>
+              <div v-if="c.reply_text" style="margin-top:6px;color:#5a8a6a">↩ 拟回复（{{ c.reply_text.length }}字）：{{ c.reply_text }}</div>
+              <div v-if="c.skip_reason" style="margin-top:4px;color:#8b8175;font-size:12px">原因：{{ c.skip_reason }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+              <span :class="['queue-state', { waiting: c.reply_status === 'pending_review' }]">{{ COMMENT_STATE[c.reply_status] || c.reply_status }}</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                <button v-if="!c.replied && c.reply_text" type="button" style="color:#5a8a6a" @click="approveReply(c)">通过并发送</button>
+                <button type="button" @click="addTakeoverByUser(c)">暂停该用户自动回复</button>
+              </div>
+              <div v-if="!c.replied" style="display:flex;gap:6px;margin-top:2px">
+                <input v-model="manualReplyText[c.id]" placeholder="人工回复内容" style="padding:6px 9px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px;width:170px" />
+                <button type="button" @click="sendManualReply(c)">发送</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-grid" style="margin-bottom:16px">
+        <!-- 人设卡 -->
+        <article class="setting-panel panel">
+          <div class="panel-head"><div><span class="section-label">PERSONA</span><h3>人设卡</h3></div></div>
+          <div v-if="personaCard" style="display:flex;flex-direction:column;gap:8px;font-size:13px">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">称呼
+              <input v-model="personaCard.name" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px" /></label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">角色定位
+              <input v-model="personaCard.role" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px" /></label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">语气
+              <input v-model="personaCard.tone" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px" /></label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">禁忌（逗号分隔）
+              <input :value="(personaCard.taboo || []).join('、')" @input="personaCard.taboo = $event.target.value.split(/[、,，]/).filter(Boolean)" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px" /></label>
+            <button class="outline-button" type="button" @click="savePersonaCard">保存人设卡</button>
+          </div>
+        </article>
+
+        <!-- 禁用词 -->
+        <article class="setting-panel panel">
+          <div class="panel-head"><div><span class="section-label">FORBIDDEN</span><h3>禁用词表</h3></div></div>
+          <p style="font-size:12px;color:#8b8175;margin:0 0 8px">AI 生成的回复命中任一禁用词 → 转人工，不自动发送</p>
+          <textarea v-model="forbiddenText" rows="6" style="width:100%;padding:9px 11px;border:1px solid #e3dcd2;border-radius:9px;font-size:12px;line-height:1.7;font-family:inherit"></textarea>
+          <button class="outline-button" type="button" style="margin-top:8px" @click="saveForbidden">保存禁用词</button>
+        </article>
+      </div>
+
+      <!-- 知识库 -->
+      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:13px">知识库（自动回复的唯一依据，未命中就不回）</b>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0">
+          <input v-model="knowledgeForm.category" placeholder="分类" style="width:100px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px" />
+          <input v-model="knowledgeForm.question" placeholder="问题" style="flex:1;min-width:150px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px" />
+          <input v-model="knowledgeForm.answer" placeholder="答案" style="flex:1.4;min-width:180px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px" />
+          <input v-model="knowledgeForm.keywords" placeholder="关键词（空格分隔）" style="width:170px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px" />
+          <button class="outline-button" type="button" @click="addKnowledgeItem">添加</button>
+        </div>
+        <div v-if="!knowledgeItems.length" style="color:#8b8175;font-size:13px">知识库是空的 —— 不添加就永远不会自动回复</div>
+        <div v-for="k in knowledgeItems" :key="'kb' + k.id" style="border-top:1px solid #f0ebe3;padding:8px 0;font-size:12px">
+          <b>{{ k.category }}</b> · {{ k.question }}
+          <div style="color:#8b8175">{{ k.answer }}</div>
+          <div style="color:#8b8175">关键词：{{ (() => { try { return JSON.parse(k.keywords || '[]').join('、') } catch { return k.keywords } })() }}</div>
+        </div>
+      </div>
+
+      <!-- 人工介入名单 -->
+      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:13px">人工介入名单（名单内用户不再自动回复）</b>
+        <div v-if="!takeoverItems.length" style="color:#8b8175;font-size:12px;margin-top:8px">名单为空</div>
+        <div v-for="t in takeoverItems" :key="'tk' + t.user_id" style="display:flex;justify-content:space-between;align-items:center;border-top:1px solid #f0ebe3;padding:7px 0;font-size:12px">
+          <span><b>{{ t.nickname || t.user_id }}</b> · {{ t.reason }} · {{ (t.since || '').slice(0, 16) }}</span>
+          <button type="button" @click="removeTakeoverItem(t.user_id)">恢复自动回复</button>
+        </div>
       </div>
     </template>
 

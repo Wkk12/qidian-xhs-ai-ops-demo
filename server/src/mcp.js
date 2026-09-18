@@ -64,6 +64,18 @@ export const mcp = {
       timeout,
     }),
 
+  /* ---------- 通知 / 评论（R14 评论自动回复用） ---------- */
+  notificationsUnread: () => call('/api/v1/notifications/unread'),
+  /** 拉通知列表（含评论原文、评论ID、笔记ID）。type: comments|likes|follows */
+  notificationsList: (opts = {}) =>
+    call('/api/v1/notifications/list', { method: 'POST', body: { ...opts } }),
+  /** 回复通知里的评论 */
+  notificationsReply: ({ commentId, noteId, content }) =>
+    call('/api/v1/notifications/reply', {
+      method: 'POST',
+      body: { comment_id: commentId, note_id: noteId, content },
+    }),
+
   /** 发布图文：images 用本地绝对路径 */
   publish: ({ title, content, images, tags }) =>
     call('/api/v1/publish', { method: 'POST', body: { title, content, images, tags } }),

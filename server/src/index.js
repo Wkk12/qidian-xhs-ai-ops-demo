@@ -15,6 +15,11 @@ import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
 import { collectSnapshots, buildReport } from './report.js';
+import {
+  getPersona, setPersona, getForbidden, setForbidden, pollOnce, startPoller,
+  listComments, approveComment, manualReply, statsComments,
+  takeover, resumeAuto, listTakeover, matchKnowledge,
+} from './comments.js';
 import { discover, analyzeAuthor, analyzeAll, listCompetitors, addCompetitor, removeCompetitor, enrich, enrichTimes } from './competitors.js';
 import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick } from './publish.js';
 import { deepseekReady, deepseekInfo } from './deepseek.js';
@@ -237,6 +242,52 @@ app.get('/api/img', async (req, reply) => {
   reply.header('Cache-Control', 'public, max-age=86400');
   return reply.send(buf);
 });
+
+// ---------- 评论自动回复（R14） ----------
+// 人设卡
+app.get('/api/persona', async () => ({ ok: true, persona: getPersona() }));
+app.post('/api/persona', async (req) => setPersona(req.body || {}));
+
+// 禁用词表
+app.get('/api/forbidden-words', async () => ({ ok: true, words: getForbidden() }));
+app.post('/api/forbidden-words', async (req) => setForbidden((req.body || {}).words || []));
+
+// 评论状态总览
+app.get('/api/comments/stats', async () => ({ ok: true, stats: statsComments() }));
+
+// 评论列表（可按状态筛）
+app.get('/api/comments/list', async (req) => {
+  const q = req.query || {};
+  const limit = Math.min(Number(q.limit) || 100, 500);
+  return { ok: true, items: listComments({ status: q.status || null, limit }) };
+});
+
+// 手动跑一轮（排障/演示用；线上由后台 5 分钟自动跑）
+app.post('/api/comments/poll', async (req) => {
+  const b = req.body || {};
+  return pollOnce({ limit: Number(b.limit) || 20 });
+});
+
+// 规则匹配自测（不产生副作用，方便验证知识库命中）
+app.post('/api/comments/match-test', async (req) => {
+  const text = (req.body || {}).text || '';
+  const hit = matchKnowledge(text);
+  return { ok: true, text, matched: !!hit, score: hit ? hit.score : 0,
+           question: hit ? hit.item.question : null, answer: hit ? hit.item.answer : null };
+});
+
+// 人工待办
+app.post('/api/comments/:id/approve', async (req) => approveComment(req.params.id));
+app.post('/api/comments/:id/reply', async (req) => manualReply(req.params.id, (req.body || {}).text));
+
+// 人工介入名单
+app.get('/api/takeover', async () => ({ ok: true, items: listTakeover() }));
+app.post('/api/takeover', async (req) => {
+  const b = req.body || {};
+  if (!b.userId) throw Object.assign(new Error('缺少 userId'), { status: 400 });
+  return takeover(b.userId, b.nickname || '', b.reason || '手动加入');
+});
+app.delete('/api/takeover/:userId', async (req) => resumeAuto(req.params.userId));
 
 // ---------- 手工填报（R13：咨询数/到店数） ----------
 app.get('/api/manual-metrics', async (req) => {
@@ -692,8 +743,17 @@ app.get('/api/knowledge', async () =>
 
 app.post('/api/knowledge', async (req) => {
   const k = req.body || {};
+  // keywords 既可能是数组也可能是字符串；node:sqlite 不接受数组绑定 → 统一转 JSON 字符串
+  let kws = k.keywords;
+  if (Array.isArray(kws)) kws = JSON.stringify(kws);
+  else if (kws === undefined || kws === null) kws = '[]';
+  else kws = String(kws);
+  if (!kws.trim()) kws = '[]';
+  if (!String(k.question || '').trim() && !String(k.answer || '').trim()) {
+    throw Object.assign(new Error('问题和答案不能同时为空'), { status: 400 });
+  }
   const r = db.prepare('INSERT INTO knowledge (category,question,answer,keywords,enabled,created_at) VALUES (?,?,?,?,1,?)')
-    .run(k.category || '', k.question || '', k.answer || '', k.keywords || '', now());
+    .run(k.category || '', k.question || '', k.answer || '', kws, now());
   return { ok: true, id: Number(r.lastInsertRowid) };
 });
 
@@ -726,6 +786,7 @@ app.post('/api/settings', async (req) => {
 // ---------- 启动 ----------
 try {
   startScheduler();
+startPoller();
 await app.listen({ port: PORT, host: HOST });
   log('info', 'server', `启动成功 http://${HOST}:${PORT}`);
   console.log(`[绮点运营平台] 本地服务已启动 -> http://${HOST}:${PORT}`);

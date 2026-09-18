@@ -44,6 +44,7 @@
 | index | HTTP 路由 + 前端托管 + 创作者中心 | 全部 | `server/src/index.js` |
 | competitors | 对标账号发现 + 6 维度分析 | R11 | `server/src/competitors.js` |
 | report | 24/48/72h 快照 + 复盘报告与建议 | R12 | `server/src/report.js` |
+| comments | 评论规则轮询 + 知识库匹配 + AI 回复 | R14 | `server/src/comments.js` |
 | alias-port | 旧端口转发 | — | `server/src/alias-port.js` |
 
 **前端**：`web/`（Vue 3.5 + Element Plus），页面结构为 Wkk 定稿，**只改数据来源**（红线 2）。
