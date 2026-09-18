@@ -30,6 +30,13 @@ export const api = {
   deleteAsset: (id) => req(`/assets/${id}`, { method: 'DELETE' }),
   registerAsset: (payload) => req('/assets/register', { method: 'POST', body: payload }),
 
+  // 对标账号监控（R11）
+  competitors: () => req('/competitors'),
+  discoverCompetitors: (p) => req('/competitors/discover', { method: 'POST', body: p || {} }),
+  addCompetitor: (p) => req('/competitors', { method: 'POST', body: p }),
+  removeCompetitor: (id) => req(`/competitors/${id}`, { method: 'DELETE' }),
+  deepAnalyzeCompetitor: (id, p) => req(`/competitors/${id}/deep-analyze`, { method: 'POST', body: p || {} }),
+
   // 发布（M1）
   publishTasks: () => req('/publish/tasks'),
   bestTime: () => req('/publish/best-time'),

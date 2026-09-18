@@ -42,6 +42,7 @@
 | generate | 内容生成引擎（四参考系+七天结构） | R2 | `server/src/generate.js` |
 | publish | 发布状态机 + 调度 + 预检 | R5/R6 | `server/src/publish.js` |
 | index | HTTP 路由 + 前端托管 + 创作者中心 | 全部 | `server/src/index.js` |
+| competitors | 对标账号发现 + 6 维度分析 | R11 | `server/src/competitors.js` |
 | alias-port | 旧端口转发 | — | `server/src/alias-port.js` |
 
 **前端**：`web/`（Vue 3.5 + Element Plus），页面结构为 Wkk 定稿，**只改数据来源**（红线 2）。
@@ -83,7 +84,9 @@ CREATE TABLE metrics (
 CREATE TABLE trends (
   id INTEGER PRIMARY KEY, keyword TEXT, note_id TEXT UNIQUE,
   title TEXT, author TEXT, liked INTEGER, collected INTEGER, commented INTEGER,
-  cover TEXT, url TEXT, note_time TEXT, scraped_at TEXT
+  cover TEXT, url TEXT, note_time TEXT,
+  xsec_token TEXT,                              -- 拉笔记详情的必需参数
+  scraped_at TEXT
 );
 
 -- 账号定位 + 内容支柱（运营计划表）

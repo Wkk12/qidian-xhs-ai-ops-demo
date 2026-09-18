@@ -14,6 +14,7 @@ import { mcp, extractMetrics } from './mcp.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
+import { discover, analyzeAuthor, analyzeAll, listCompetitors, addCompetitor, removeCompetitor, enrich, enrichTimes } from './competitors.js';
 import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick } from './publish.js';
 import { deepseekReady, deepseekInfo } from './deepseek.js';
 
@@ -236,6 +237,47 @@ app.get('/api/img', async (req, reply) => {
   return reply.send(buf);
 });
 
+// ---------- 对标账号监控（R11） ----------
+app.get('/api/competitors', async () => ({ ok: true, items: analyzeAll() }));
+
+app.post('/api/competitors/discover', async (req) => {
+  const b = req.body || {};
+  return discover({
+    threshold: Number(b.threshold) || 3,
+    min: Number(b.min) || 5,
+    max: Number(b.max) || 8,
+  });
+});
+
+app.post('/api/competitors', async (req) => {
+  const b = req.body || {};
+  return addCompetitor({ userId: b.userId, nickname: b.nickname, note: b.note });
+});
+
+app.delete('/api/competitors/:id', async (req) => removeCompetitor(req.params.id));
+
+app.post('/api/competitors/:id/analyze', async (req) => {
+  const c = db.prepare('SELECT * FROM competitors WHERE id = ?').get(Number(req.params.id));
+  if (!c) throw Object.assign(new Error('不存在'), { status: 404 });
+  return analyzeAuthor(c.user_id);
+});
+
+// 深度分析：拉笔记详情补发布时间（慢，约 13.5s/条）
+app.post('/api/competitors/:id/deep-analyze', async (req) => {
+  const c = db.prepare('SELECT * FROM competitors WHERE id = ?').get(Number(req.params.id));
+  if (!c) throw Object.assign(new Error('不存在'), { status: 404 });
+  const b = req.body || {};
+  const r = await enrichTimes(c.user_id, { limit: Number(b.limit) || 6, gapMs: Number(b.gapMs) || 4000 });
+  return { ...r, analysis: analyzeAuthor(c.user_id) };
+});
+
+// 用昵称搜索补充该账号样本（不新增作者）
+app.post('/api/competitors/enrich', async (req) => {
+  const nick = (req.body || {}).nickname;
+  if (!nick) throw Object.assign(new Error('缺少 nickname'), { status: 400 });
+  return enrich(nick);
+});
+
 // ---------- 发布（M1：状态机 + 定时 + 预检 + 建议时间） ----------
 app.get('/api/publish/tasks', async () => ({ ok: true, items: listTasks() }));
 
@@ -357,9 +399,13 @@ function trendKeywords() {
 async function runScrape(keywords) {
   const list = keywords && keywords.length ? keywords : trendKeywords();
   const results = [];
-  const ins = db.prepare(`INSERT OR IGNORE INTO trends
-    (keyword,note_id,title,author,author_id,liked,collected,commented,cover,url,note_time,scraped_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  // upsert：已存在的笔记刷新互动数与 token（token 是拉详情的必需品）
+  const ins = db.prepare(`INSERT INTO trends
+    (keyword,note_id,title,author,author_id,liked,collected,commented,cover,url,note_time,xsec_token,scraped_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(note_id) DO UPDATE SET
+      liked=excluded.liked, collected=excluded.collected, commented=excluded.commented,
+      xsec_token=excluded.xsec_token, scraped_at=excluded.scraped_at`);
   for (const kw of list) {
     try {
       const r = await mcp.search(kw);
@@ -379,6 +425,7 @@ async function runScrape(keywords) {
           (nc.cover && (nc.cover.urlDefault || nc.cover.urlPre)) || '',
           `https://www.xiaohongshu.com/explore/${it.id || nc.noteId || ''}`,
           nc.time ? String(nc.time) : '',
+          it.xsecToken || (it.xsec_token) || '',
           now(),
         );
         if (info.changes > 0) saved++;

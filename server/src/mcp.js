@@ -14,12 +14,12 @@ import { log } from './db.js';
 const BASE = process.env.XHS_MCP_BASE || 'http://localhost:18060';
 const TIMEOUT = Number(process.env.XHS_MCP_TIMEOUT || 180000);
 
-async function call(pathname, { method = 'GET', body, params } = {}) {
+async function call(pathname, { method = 'GET', body, params, timeout } = {}) {
   const url = new URL(BASE + pathname);
   if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
+  const timer = setTimeout(() => ctrl.abort(), timeout || TIMEOUT);
   const t0 = Date.now();
   try {
     const res = await fetch(url, {
@@ -53,10 +53,15 @@ export const mcp = {
   search: (keyword, filters) =>
     call('/api/v1/feeds/search', { params: { keyword, ...(filters || {}) } }),
   feedList: () => call('/api/v1/feeds/list'),
-  feedDetail: (feedId, xsecToken, loadAllComments = false) =>
+  /**
+   * 笔记详情。⚠️ 实测该接口很慢：带上有效 token 后可能挂到 180 秒被中断。
+   * 故支持自定义 timeout（默认 45 秒）——调用方应按"尽力而为"处理失败。
+   */
+  feedDetail: (feedId, xsecToken, loadAllComments = false, timeout = 45000) =>
     call('/api/v1/feeds/detail', {
       method: 'POST',
       body: { feed_id: feedId, xsec_token: xsecToken, load_all_comments: loadAllComments },
+      timeout,
     }),
 
   /** 发布图文：images 用本地绝对路径 */

@@ -12,6 +12,25 @@ const DATA_DIR = path.resolve(__dirname, '../data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const db = new DatabaseSync(path.join(DATA_DIR, 'xhs-ops.db'));
+/**
+ * 轻量迁移：给已存在的表补列。
+ * SQLite 的 ALTER TABLE ADD COLUMN 不支持 IF NOT EXISTS → 先查 PRAGMA 再改。
+ * 新增字段时，除了改上面的 CREATE TABLE，也要在这里补一条。
+ */
+function migrate(d) {
+  const cols = (t) => {
+    try { return d.prepare(`PRAGMA table_info(${t})`).all().map((c) => c.name); }
+    catch { return []; }
+  };
+  const add = (t, col, type) => {
+    if (cols(t).length && !cols(t).includes(col)) {
+      try { d.exec(`ALTER TABLE ${t} ADD COLUMN ${col} ${type}`); } catch { /* 已存在则忽略 */ }
+    }
+  };
+  add('trends', 'xsec_token', 'TEXT');
+}
+migrate(db);
+
 
 db.exec(`
 PRAGMA journal_mode = WAL;
@@ -92,6 +111,7 @@ CREATE TABLE IF NOT EXISTS trends (
   cover       TEXT,
   url         TEXT,
   note_time   TEXT,
+  xsec_token  TEXT,
   scraped_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_trends_kw ON trends(keyword, scraped_at);

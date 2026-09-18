@@ -330,11 +330,11 @@ async function loadContents() {
 const onViewChange = (v) => {
   if (v === 'settings') loadRealStatus()
   if (v === 'assets') loadAssets()
-  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator() }
+  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
   if (v === 'library') loadLibrary()
   if (v === 'schedule') { loadContents(); loadPublish(true) }
-  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning() }
+  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning(); loadCompetitors() }
 }
 /* -------- 内容趋势（真实：来自每日采集的指标快照） -------- */
 const metricsRows = ref([])
@@ -380,6 +380,72 @@ function imgProxy(u) {
   if (!u) return ''
   if (u.startsWith('/') || u.startsWith('data:')) return u
   return '/api/img?url=' + encodeURIComponent(u)
+}
+
+/* -------- 对标账号监控（R11） -------- */
+const competitors = ref([])
+const compLoading = ref(false)
+const compDiscovering = ref(false)
+const compDiscover = ref(null)
+const compDeepBusy = ref(null)
+const compError = ref('')
+
+async function loadCompetitors() {
+  compLoading.value = true
+  compError.value = ''
+  try {
+    const r = await api.competitors()
+    competitors.value = r.items || []
+  } catch (e) {
+    compError.value = '读取对标账号失败：' + (e.message || '')
+  } finally {
+    compLoading.value = false
+  }
+}
+
+async function discoverCompetitors() {
+  compDiscovering.value = true
+  compDiscover.value = null
+  try {
+    compDiscover.value = await api.discoverCompetitors({})
+  } catch (e) {
+    compError.value = '发现失败：' + (e.message || '')
+  } finally {
+    compDiscovering.value = false
+  }
+}
+
+async function addCompetitorItem(c) {
+  try {
+    await api.addCompetitor({ userId: c.authorId, nickname: c.nickname })
+    showNotice('已加入监控：' + c.nickname)
+    await loadCompetitors()
+    await discoverCompetitors()
+  } catch (e) {
+    showNotice('添加失败：' + (e.message || ''))
+  }
+}
+
+async function removeCompetitorItem(id) {
+  if (!window.confirm('确认移出监控？')) return
+  try {
+    await api.removeCompetitor(id)
+    await loadCompetitors()
+  } catch (e) { showNotice('移除失败：' + (e.message || '')) }
+}
+
+async function deepAnalyze(id) {
+  compDeepBusy.value = id
+  showNotice('深度分析中：要逐条拉笔记详情补发布时间，约 1 分钟…')
+  try {
+    const r = await api.deepAnalyzeCompetitor(id, { limit: 6, gapMs: 4500 })
+    showNotice(r.filled ? `已补齐 ${r.filled} 条发布时间` : ('未取到发布时间：' + (r.note || '')))
+    await loadCompetitors()
+  } catch (e) {
+    showNotice('深度分析失败：' + (e.message || ''))
+  } finally {
+    compDeepBusy.value = null
+  }
 }
 
 /* -------- 发布系统（M1：队列 / 排期 / 预检 / 建议时间） -------- */
@@ -1167,6 +1233,82 @@ onBeforeUnmount(() => {
         </article>
       </div>
       <article class="strategy-card panel"><span class="strategy-orb"><Sparkles :size="19" /></span><div><span class="section-label">今日复盘建议</span><h3>AI 复盘建议待接入</h3><p>接入 DeepSeek 后，这里会根据账号真实笔记数据给出选题、发布时间与内容切口建议，并联动调整后续几天的大纲。</p></div><button type="button" @click="showNotice('复盘建议功能待接入（需先配置 DeepSeek API Key）')">应用到后续大纲 <ArrowRight :size="15" /></button></article>
+
+      <!-- ===== 对标账号监控（R11）===== -->
+      <article class="module-toolbar panel" style="margin-top:16px">
+        <div><span class="section-label">PEER RADAR</span><h2>对标账号监控</h2>
+        <p>从热榜结果里聚合出高频出现的作者，分析他们的 6 个维度</p></div>
+        <div style="display:flex;gap:10px">
+          <button class="outline-button" type="button" :disabled="compDiscovering" @click="discoverCompetitors">{{ compDiscovering ? '分析中…' : '发现对标账号' }}</button>
+          <button class="outline-button" type="button" @click="loadCompetitors">刷新</button>
+        </div>
+      </article>
+
+      <div v-if="compDiscover" class="panel" style="padding:14px 18px;margin-bottom:16px">
+        <b style="font-size:13px">发现结果</b>
+        <p style="margin:6px 0 10px;font-size:12px;color:#8b8175">
+          热榜 {{ compDiscover.totalTrendNotes }} 条 / {{ compDiscover.keywords }} 个关键词 ｜
+          阈值 请求 {{ compDiscover.thresholdAsked }} → 实际 {{ compDiscover.thresholdUsed }}
+          {{ compDiscover.relaxed ? '（已放宽）' : '' }}
+          <span v-if="compDiscover.note"> ｜ {{ compDiscover.note }}</span>
+        </p>
+        <div v-if="!compDiscover.candidates.length" style="font-size:13px;color:#8b8175">没有新的候选账号</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <div v-for="c in compDiscover.candidates" :key="c.authorId"
+               style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#faf7f3;border-radius:10px;font-size:12px">
+            <b>{{ c.nickname }}</b>
+            <span style="color:#8b8175">出现 {{ c.notes }} 次 · 热度 {{ c.score }}</span>
+            <button type="button" style="color:#5a8a6a" @click="addCompetitorItem(c)">+ 加入监控</button>
+          </div>
+        </div>
+      </div>
+
+      <p v-if="compError" class="panel" style="padding:12px 16px">{{ compError }}</p>
+
+      <div v-if="!competitors.length && !compLoading" class="panel" style="padding:22px 18px;color:#8b8175;font-size:13px">
+        还没有监控任何对标账号 —— 点右上角「发现对标账号」。
+      </div>
+
+      <div v-for="c in competitors" :key="'comp' + c.id" class="panel" style="padding:16px 18px;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <b style="font-size:15px">{{ c.nickname }}</b>
+            <span :style="c.status === 'active' ? 'color:#5a8a6a' : 'color:#b4544a'">
+              {{ c.status === 'active' ? '正常' : '样本失效（改名/注销）' }}
+            </span>
+            <small style="color:#8b8175">样本 {{ c.sampleSize }} 条 · 总点赞 {{ c.totalLiked }}</small>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" :disabled="compDeepBusy === c.id" @click="deepAnalyze(c.id)">
+              {{ compDeepBusy === c.id ? '深度分析中…' : '深度分析(补发布时间)' }}
+            </button>
+            <button type="button" style="color:#b4544a" @click="removeCompetitorItem(c.id)">移出</button>
+          </div>
+        </div>
+
+        <div v-if="c.analysis && c.analysis.ok" style="margin-top:12px;font-size:12px;line-height:2">
+          <div><b style="display:inline-block;width:88px">① 更新频率</b>{{ c.analysis.frequency.text }}</div>
+          <div><b style="display:inline-block;width:88px">② 爆款率</b>{{ c.analysis.hitRate.text }}</div>
+          <div><b style="display:inline-block;width:88px">③ 题材分布</b>
+            <span v-for="t in c.analysis.topics" :key="t.keyword" style="margin-right:12px">{{ t.keyword }} {{ t.percent }}%（{{ t.count }}条）</span>
+          </div>
+          <div><b style="display:inline-block;width:88px">④ 发布时段</b>
+            <template v-if="c.analysis.slots.length">
+              <span v-for="s in c.analysis.slots" :key="s.hour" style="margin-right:12px">{{ s.hour }} ×{{ s.count }}</span>
+              <span style="color:#5a8a6a">最佳 {{ c.analysis.bestHour }}</span>
+            </template>
+            <span v-else style="color:#8b8175">数据不足（点「深度分析」补发布时间）</span>
+          </div>
+          <div><b style="display:inline-block;width:88px">⑤ 互动结构</b>{{ c.analysis.structure.text }}</div>
+          <div><b style="display:inline-block;width:88px">⑥ 标题句式</b>
+            <span v-for="s in c.analysis.styles" :key="s.style" style="margin-right:12px">{{ s.style }} {{ s.percent }}%</span>
+          </div>
+          <div v-if="c.analysis.topNotes.length" style="margin-top:6px;color:#8b8175">
+            代表作：<span v-for="(n, i) in c.analysis.topNotes" :key="'tn' + i">{{ n.title }}（👍{{ n.liked }}）{{ i < c.analysis.topNotes.length - 1 ? ' · ' : '' }}</span>
+          </div>
+        </div>
+        <div v-else style="margin-top:10px;font-size:12px;color:#8b8175">暂无分析（样本不足）</div>
+      </div>
     </template>
 
     <template v-else-if="props.activeView === 'outline'">
