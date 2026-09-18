@@ -244,6 +244,57 @@ http://127.0.0.1:5199/            → HTTP 200  转发正常（兼容旧标签�
 
 ---
 
+## 交付前 8 模块全量走查（收尾验收）
+
+**验证时间**：2026-09-18
+
+### 走查方式
+用 `nav.main-nav button` 逐个点击切换（**从别的模块切过去**，才会走 `onViewChange`），
+每次等 7–10 秒后读 `document.body.innerText` 核对关键区块。
+
+### 8/8 模块全部渲染
+```
+今日运营   粉丝 ✓ 关注 ✓ 本周内容主线 ✓
+内容工坊   AI GENERATION ✓ 四参考系 ✓ TREND RADAR ✓ 原创度门禁 ✓
+排期发布   待发布 ✓ 建议发布 ✓ 预检 ✓ 排期 ✓
+素材灵感   AI IMAGE GEN ✓ 上传 ✓ 素材 ✓
+数据洞察   PEER RADAR ✓ AI REVIEW ✓ MANUAL INPUT ✓ 数据来源 ✓
+运营大纲   OPERATION PLAN ✓ 内容支柱 ✓
+文案库     篇数 ✓ 导入 ✓
+系统设置   COMMENT AUTO-REPLY ✓ 人机运行状态 ✓ 人设卡 ✓ 知识库 ✓ 人工介入名单 ✓ 观察期 ✓
+```
+
+### 🔴 走查抓到 2 个真 bug 并修复
+
+**① 生图产物 URL 前缀写错（R15 遗留）**
+```
+现象: GET /uploads/gen_standard_*.png → HTTP 404（生成的图在页面上显示不出来）
+根因: imagegen.js 返回 `/uploads/${fname}`，而 index.js 注册的静态前缀是
+      `fastifyStatic({ root: UPLOAD_DIR, prefix: '/files/' })`
+修法: 改回 /files/；并修正库里已写错的行（assets.id=2 的 web_path）
+验证: /files/gen_standard_*.png → HTTP 200 ✅
+```
+
+**② 过期封面把 502 甩给前端（破图）**
+```
+现象: /api/img?url=...sns-webpic...202609171712/... → HTTP 502
+根因: 小红书图片 URL 自带过期时间戳（本例 202609171712 = 09-17 17:12），
+      过上游期后 403/404 → 原实现直接 throw 502
+修法: 上游失败回 1×1 透明 PNG（HTTP 200）+ 短缓存 600s + 记 warn 日志；
+      重新抓取热榜会刷新 URL
+验证: 同一条过期 URL → HTTP 200（不再破图）
+```
+
+### 图片元素断言（修复后）
+```
+内容工坊 TREND RADAR：img total 8 | loaded 8 | broken 0   ✅
+（修复前会有 1 张 broken）
+```
+
+**结论**：✅ 通过（8/8 模块 + 2 个真 bug 修复）
+
+---
+
 ## 交付前最终全量体检
 
 **验证时间**：2026-09-18（全部任务完成后）

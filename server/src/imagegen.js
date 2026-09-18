@@ -165,7 +165,7 @@ export async function generateImage({ prompt, tier = 'standard', ratio = '1:1', 
   const info = db.prepare(`INSERT INTO assets
     (kind, name, file_path, web_path, size, tags, prompt, content_id, created_at)
     VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run('generated', fname, fpath, `/uploads/${fname}`, buf.length,
+    .run('generated', fname, fpath, `/files/${fname}`, buf.length,
          JSON.stringify(['AI生成', t.name]), finalPrompt, contentId, now());
 
   const elapsed = (Date.now() - t0) / 1000;
@@ -175,7 +175,7 @@ export async function generateImage({ prompt, tier = 'standard', ratio = '1:1', 
     ok: true,
     assetId: Number(info.lastInsertRowid),
     file: fpath,
-    url: `/uploads/${fname}`,
+    url: `/files/${fname}`,
     tier: t.key,
     tierName: t.name,
     imageSize: t.imageSize,

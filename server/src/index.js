@@ -230,14 +230,30 @@ app.get('/api/img', async (req, reply) => {
   if (!u || !/^https?:\/\//.test(u)) {
     throw Object.assign(new Error('缺少合法的 url'), { status: 400 });
   }
-  const r = await fetch(u, {
-    headers: {
-      Referer: 'https://www.xiaohongshu.com/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-    },
-  });
-  if (!r.ok) throw Object.assign(new Error('图片获取失败 ' + r.status), { status: 502 });
+  let r;
+  try {
+    r = await fetch(u, {
+      headers: {
+        Referer: 'https://www.xiaohongshu.com/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      },
+    });
+  } catch (e) {
+    r = null;
+    log('warn', 'img', `封面请求异常：${String(e.message).slice(0, 60)}`);
+  }
+  if (!r || !r.ok) {
+    // 小红书图片 URL 自带过期时间戳（形如 .../202609171712/...）→ 过期后上游 403/404。
+    // 不给前端甩破图：回 1×1 透明 PNG + 短缓存，并记 warn 便于排查（重新抓取会刷新 URL）。
+    log('warn', 'img', `封面取回失败 HTTP ${r ? r.status : 'ERR'}（多为 URL 已过期）：${String(u).slice(0, 70)}`);
+    reply.header('Content-Type', 'image/png');
+    reply.header('Cache-Control', 'public, max-age=600');
+    return reply.send(Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64',
+    ));
+  }
   const buf = Buffer.from(await r.arrayBuffer());
   reply.header('Content-Type', r.headers.get('content-type') || 'image/jpeg');
   reply.header('Cache-Control', 'public, max-age=86400');
