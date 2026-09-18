@@ -244,6 +244,61 @@ http://127.0.0.1:5199/            → HTTP 200  转发正常（兼容旧标签�
 
 ---
 
+## T46 Mac Intel 交付适配
+
+**验证时间**：2026-09-18
+
+### ① 交叉编译（原判定为「唯一硬骨头」）
+```
+cd xiaohongshu-mcp-go
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+  -o dist/xiaohongshu-mcp-darwin-amd64 .
+EXIT=0   耗时 29 秒   →  16,719,568 字节
+
+GOOS=darwin GOARCH=arm64 ... → 16,330,306 字节
+
+文件格式校验（前 4 字节魔数）:
+  amd64: cffaedfe → Mach-O 64位小端 ✅
+  arm64: cffaedfe → Mach-O 64位小端 ✅
+```
+**结论：无需真机即可产出合法 macOS 可执行文件** ✅
+
+### ② 跨平台性排查
+```
+CGO 依赖:            无（grep 'import "C"' 为空）✅
+硬编码 Windows 路径:  无（grep 'C:\\|C:/Users|powershell' 仅命中 db.exec 误报）✅
+运行依赖:            fastify / @fastify/cors / multipart / static —— 全纯 JS ✅
+Node 要求:           >=22.5.0（node:sqlite 内置）—— 已写入交付说明
+```
+
+### ③ 交付包（`scripts/package-delivery.py`）
+```
+收集 41 个文件 | 原始 32.3 MB → 压缩 13.5 MB
+
+密钥扫描（打包时）: ✅ 未发现密钥泄露
+❌ 不应存在的（全部通过）:
+   ✅ .env 未包含      ✅ server/data 未包含   ✅ node_modules 未包含
+   ✅ .sdd 内部规格未包含  ✅ .git 未包含      ✅ .db 未包含   ✅ 测试脚本未包含
+✅ 应存在的:
+   ✅ server/src/index.js        ✅ server/package.json
+   ✅ 后端模块 11 个: assets comments competitors db dedupe deepseek
+                     generate imagegen mcp publish report
+   ✅ web/dist/index.html + assets
+   ✅ mac/启动.command           ✅ docs/交付说明_MacIntel.md
+   ✅ mcp/xiaohongshu-mcp-darwin-amd64（Intel）
+   ✅ mcp/xiaohongshu-mcp-darwin-arm64（Apple 芯片）
+二次扫描（逐字节遍历 zip 全部条目）: ✅ 0 处 sk-
+启动脚本权限位: 0o755 ✅（第一次打包为 0o666，已修 → 见 05-changelog）
+```
+
+### ④ 交付说明
+`docs/交付说明_MacIntel.md` —— 5 步指引（装 Node → 放桌面 → 开权限(兜底) → 双击 → 扫码登录）
++ 数据/备份位置表 + 5 条常见问题 + 安全说明
+
+**结论**：✅ 通过（P0 硬骨头解除，交付包可发客户）
+
+---
+
 ## T45 AI 生图两档
 
 **验证时间**：2026-09-18
