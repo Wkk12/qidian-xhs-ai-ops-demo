@@ -30,6 +30,11 @@ export const api = {
   deleteAsset: (id) => req(`/assets/${id}`, { method: 'DELETE' }),
   registerAsset: (payload) => req('/assets/register', { method: 'POST', body: payload }),
 
+  // 手工填报（R13）
+  manualMetrics: (days) => req(`/manual-metrics?days=${days || 30}`),
+  saveManualMetrics: (p) => req('/manual-metrics', { method: 'POST', body: p }),
+  deleteManualMetrics: (date) => req(`/manual-metrics/${date}`, { method: 'DELETE' }),
+
   // 复盘报告（R12）
   report: () => req('/report?days=30'),
   buildReport: (p) => req('/report', { method: 'POST', body: p || {} }),

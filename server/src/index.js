@@ -238,6 +238,49 @@ app.get('/api/img', async (req, reply) => {
   return reply.send(buf);
 });
 
+// ---------- 手工填报（R13：咨询数/到店数） ----------
+app.get('/api/manual-metrics', async (req) => {
+  const days = Math.min(Number((req.query || {}).days) || 30, 365);
+  const from = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  const items = db.prepare('SELECT * FROM manual_metrics WHERE date >= ? ORDER BY date DESC').all(from);
+  const sum = db.prepare('SELECT COALESCE(SUM(inquiries),0) AS i, COALESCE(SUM(visits),0) AS v FROM manual_metrics WHERE date >= ?').get(from);
+  return { ok: true, days, items, total: { inquiries: sum.i, visits: sum.v } };
+});
+
+app.post('/api/manual-metrics', async (req) => {
+  const b = req.body || {};
+  const date = String(b.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw Object.assign(new Error('日期格式必须是 YYYY-MM-DD'), { status: 400 });
+  }
+  const toInt = (v, name) => {
+    if (v === undefined || v === null || v === '') return 0;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) {
+      throw Object.assign(new Error(`${name} 必须是非负整数`), { status: 400 });
+    }
+    return n;
+  };
+  const inquiries = toInt(b.inquiries, '咨询数');
+  const visits = toInt(b.visits, '到店数');
+
+  // 同日唯一 → 覆盖而非新增（幂等）
+  db.prepare(`INSERT INTO manual_metrics (date, inquiries, visits, note, created_at, updated_at)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT(date) DO UPDATE SET
+      inquiries=excluded.inquiries, visits=excluded.visits,
+      note=excluded.note, updated_at=excluded.updated_at`)
+    .run(date, inquiries, visits, b.note || '', now(), now());
+  return { ok: true, date, inquiries, visits };
+});
+
+app.delete('/api/manual-metrics/:date', async (req) => {
+  const date = req.params.date;
+  const info = db.prepare('DELETE FROM manual_metrics WHERE date = ?').run(date);
+  if (info.changes === 0) throw Object.assign(new Error('该日期没有记录'), { status: 404 });
+  return { ok: true };
+});
+
 // ---------- 复盘报告与建议（R12） ----------
 app.post('/api/report/snapshots', async () => collectSnapshots());
 app.get('/api/report', async (req) => {

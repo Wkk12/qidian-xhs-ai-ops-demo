@@ -129,6 +129,16 @@ CREATE TABLE IF NOT EXISTS publish_tasks (
   updated_at  TEXT
 );
 
+-- 手工填报（R13）：平台无咨询数/到店数，需人工每日录入
+CREATE TABLE IF NOT EXISTS manual_metrics (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  date       TEXT UNIQUE,        -- YYYY-MM-DD，唯一 → 同日录入即覆盖
+  inquiries  INTEGER DEFAULT 0,  -- 咨询数
+  visits     INTEGER DEFAULT 0,  -- 到店数
+  note       TEXT,
+  created_at TEXT, updated_at TEXT
+);
+
 -- 发布后 24/48/72 小时快照（R12 复盘用）
 CREATE TABLE IF NOT EXISTS snapshots (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

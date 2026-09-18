@@ -330,7 +330,7 @@ async function loadContents() {
 const onViewChange = (v) => {
   if (v === 'settings') loadRealStatus()
   if (v === 'assets') loadAssets()
-  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors() }
+  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadManual() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
   if (v === 'library') loadLibrary()
   if (v === 'schedule') { loadContents(); loadPublish(true) }
@@ -380,6 +380,51 @@ function imgProxy(u) {
   if (!u) return ''
   if (u.startsWith('/') || u.startsWith('data:')) return u
   return '/api/img?url=' + encodeURIComponent(u)
+}
+
+/* -------- 手工填报（R13：咨询数/到店数） -------- */
+const manualRows = ref([])
+const manualTotal = ref({ inquiries: 0, visits: 0 })
+const manualForm = ref({ date: new Date().toISOString().slice(0, 10), inquiries: '', visits: '', note: '' })
+const manualSaving = ref(false)
+const manualError = ref('')
+
+async function loadManual() {
+  manualError.value = ''
+  try {
+    const r = await api.manualMetrics(30)
+    manualRows.value = r.items || []
+    manualTotal.value = r.total || { inquiries: 0, visits: 0 }
+  } catch (e) {
+    manualError.value = '读取手工填报失败：' + (e.message || '')
+  }
+}
+
+async function saveManual() {
+  manualSaving.value = true
+  manualError.value = ''
+  try {
+    await api.saveManualMetrics({
+      date: manualForm.value.date,
+      inquiries: manualForm.value.inquiries === '' ? 0 : Number(manualForm.value.inquiries),
+      visits: manualForm.value.visits === '' ? 0 : Number(manualForm.value.visits),
+      note: manualForm.value.note,
+    })
+    showNotice('已保存（同日重复录入会覆盖）')
+    await loadManual()
+  } catch (e) {
+    manualError.value = '保存失败：' + (e.message || '')
+  } finally {
+    manualSaving.value = false
+  }
+}
+
+async function deleteManual(date) {
+  if (!window.confirm('删除 ' + date + ' 的填报？')) return
+  try {
+    await api.deleteManualMetrics(date)
+    await loadManual()
+  } catch (e) { showNotice('删除失败：' + (e.message || '')) }
 }
 
 /* -------- 复盘报告与建议（R12） -------- */
@@ -1264,6 +1309,50 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </div>
+      <!-- ===== 手工填报（R13）===== -->
+      <article class="module-toolbar panel" style="margin-top:16px">
+        <div><span class="section-label">MANUAL INPUT</span><h2>手工填报 · 咨询数 / 到店数</h2>
+        <p>平台不提供这两项业务数据，需每日手工录入（同日重复录入会覆盖）</p></div>
+        <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">日期
+            <input v-model="manualForm.date" type="date" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">咨询数
+            <input v-model="manualForm.inquiries" type="number" min="0" step="1" style="width:92px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">到店数
+            <input v-model="manualForm.visits" type="number" min="0" step="1" style="width:92px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <button class="outline-button" type="button" :disabled="manualSaving" @click="saveManual">{{ manualSaving ? '保存中…' : '保存' }}</button>
+        </div>
+      </article>
+
+      <p v-if="manualError" class="panel" style="padding:12px 16px">{{ manualError }}</p>
+
+      <div class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px">
+        <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">
+          <div><span class="section-label">近 30 天合计</span><b style="font-size:18px">{{ manualTotal.inquiries }}</b> 咨询</div>
+          <div><span class="section-label">&nbsp;</span><b style="font-size:18px">{{ manualTotal.visits }}</b> 到店</div>
+          <div style="align-self:flex-end;color:#8b8175">来源：<b>手工填报</b>（区别于平台数据）</div>
+        </div>
+        <div v-if="!manualRows.length" style="color:#8b8175">还没有填报记录 —— 用上面的表单录入今天的数据。</div>
+        <table v-else style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:#8b8175;text-align:left">
+            <th style="padding:6px 4px">日期</th><th style="padding:6px 4px">咨询数</th>
+            <th style="padding:6px 4px">到店数</th><th style="padding:6px 4px">备注</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="m in manualRows" :key="'mm' + m.date" style="border-top:1px solid #f0ebe3">
+              <td style="padding:6px 4px">{{ m.date }}</td>
+              <td style="padding:6px 4px">{{ m.inquiries }}</td>
+              <td style="padding:6px 4px">{{ m.visits }}</td>
+              <td style="padding:6px 4px;color:#8b8175">{{ m.note || '—' }}</td>
+              <td style="padding:6px 4px"><button type="button" style="color:#b4544a" @click="deleteManual(m.date)">删除</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <!-- ===== 复盘报告与建议（R12）===== -->
       <article class="strategy-card panel" style="margin-top:16px">
         <span class="strategy-orb"><Sparkles :size="19" /></span>
