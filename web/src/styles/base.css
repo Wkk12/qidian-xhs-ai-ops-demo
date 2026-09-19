@@ -173,6 +173,7 @@ button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 25%, 
 .live-pill span { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); box-shadow: 0 0 0 4px var(--positive-soft); animation: dot-pulse 2s ease-in-out infinite; }
 .chart-wrap { margin-top: 12px; }
 .chart-wrap svg { display: block; width: 100%; height: 158px; overflow: visible; }
+.chart-empty { margin: 0; height: 158px; display: grid; place-items: center; color: var(--muted); font-size: 11px; text-align: center; }
 .chart-grid { fill: none; stroke: var(--chart-grid); stroke-width: 1; }
 .chart-area { fill: var(--chart-area); }
 .chart-line { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw-line 1.5s .2s var(--ease) forwards; }

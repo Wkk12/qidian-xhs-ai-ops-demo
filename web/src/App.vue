@@ -92,6 +92,68 @@ async function loadPlanAndPosts() {
 
 onMounted(loadPlanAndPosts)
 
+/* -------- 内容热度趋势：真数据（小红书创作者中心 · 自己内容的每日浏览量） -------- */
+// 来源：GET /api/creator/overview → thirty.series.view_count（平台官方每日浏览量）
+const trendSeries = ref([])
+const trendLoading = ref(true)
+const trendError = ref('')
+async function loadTrendSeries() {
+  try {
+    const r = await api.creatorOverview()
+    const win = (r && (r.thirty || r.seven)) || null
+    const s = (win && win.series && win.series.view_count) || []
+    trendSeries.value = s.map((p) => ({
+      date: String(p.date).slice(5).replace('-', '/'),
+      value: Number(p.count) || 0,
+    }))
+    trendError.value = ''
+  } catch (e) {
+    trendError.value = e.message || '读取平台数据失败'
+    trendSeries.value = []
+  } finally {
+    trendLoading.value = false
+  }
+}
+onMounted(loadTrendSeries)
+
+// 图表坐标：沿用样稿 viewBox「0 0 520 210」的网格（x 34→500，基线 y=176，顶部 y=35）
+const DASH_CHART = { x0: 34, y0: 176, w: 466, h: 141 }
+
+// 有真数据才画线（全是 0 视为「平台数据还没积累」，走空态，不画假的平线）
+const trendHasData = computed(
+  () => trendSeries.value.length >= 2 && trendSeries.value.some((p) => p.value > 0),
+)
+
+const trendLine = computed(() => {
+  if (!trendHasData.value) return ''
+  const pts = trendSeries.value
+  const max = Math.max(...pts.map((p) => p.value), 1)
+  const step = DASH_CHART.w / (pts.length - 1)
+  return pts
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${(DASH_CHART.x0 + i * step).toFixed(1)} ${(DASH_CHART.y0 - (p.value / max) * DASH_CHART.h).toFixed(1)}`)
+    .join(' ')
+})
+
+const trendArea = computed(() => {
+  if (!trendLine.value) return ''
+  return `${trendLine.value} L${DASH_CHART.x0 + DASH_CHART.w} ${DASH_CHART.y0} L${DASH_CHART.x0} ${DASH_CHART.y0} Z`
+})
+
+// 轴刻度：最多 6 个，按真实采样点取（30 天窗口不挤）
+const trendTicks = computed(() => {
+  const pts = trendSeries.value
+  if (pts.length < 2) return []
+  const n = Math.min(6, pts.length)
+  const step = DASH_CHART.w / (pts.length - 1)
+  return Array.from({ length: n }, (_, k) => {
+    const i = Math.round((k * (pts.length - 1)) / (n - 1))
+    return { key: pts[i].date + '-' + i, date: pts[i].date, x: (DASH_CHART.x0 + i * step).toFixed(1) }
+  })
+})
+
+const trendTotal = computed(() => trendSeries.value.reduce((a, p) => a + p.value, 0))
+const trendWindowLabel = computed(() => (trendSeries.value.length > 7 ? '近 30 天' : '近 7 天'))
+
 
 const metrics = computed(() => [
   {
@@ -272,22 +334,28 @@ const currentView = computed(() => viewMeta[activeView.value])
             <article class="trend-card panel">
               <div class="panel-head">
                 <div><span class="section-label">TREND PULSE</span><h3>内容热度趋势</h3></div>
-                <span class="live-pill"><span /> 实时数据</span>
+                <span class="live-pill"><span /> 平台数据</span>
               </div>
               <div class="chart-wrap">
-                <svg viewBox="0 0 520 210" role="img" aria-label="近七日内容热度折线图">
+                <svg v-if="trendLine" viewBox="0 0 520 210" role="img" :aria-label="`每日浏览量趋势图 · ${trendWindowLabel}`">
                   <g class="chart-grid">
                     <path d="M34 35H500M34 82H500M34 129H500M34 176H500" />
                   </g>
-                  <path class="chart-area" d="M34 164C91 153 105 113 162 124S244 150 294 98s85-35 116-68 61-1 90-10V176H34Z" />
-                  <path class="chart-line" pathLength="1" d="M34 164C91 153 105 113 162 124S244 150 294 98s85-35 116-68 61-1 90-10" />
+                  <path class="chart-area" :d="trendArea" />
+                  <path class="chart-line" pathLength="1" :d="trendLine" />
                   <g class="chart-labels">
-                    <text x="34" y="202">周四</text><text x="126" y="202">周五</text><text x="218" y="202">周六</text>
-                    <text x="310" y="202">周日</text><text x="402" y="202">周一</text><text x="478" y="202">今天</text>
+                    <text v-for="t in trendTicks" :key="t.key" :x="t.x" y="202">{{ t.date }}</text>
                   </g>
                 </svg>
+                <p v-else class="chart-empty">
+                  {{ trendLoading ? '正在读取平台数据…' : (trendError ? '读取平台数据失败：' + trendError : `${trendWindowLabel}暂无浏览量数据 · 平台数据积累中`) }}
+                </p>
               </div>
-              <div class="trend-note"><TrendingUp :size="16" /><span>账号数据已接通本机服务 · 实时更新</span><b>{{ accountInfo.fans || 0 }} 粉丝</b></div>
+              <div class="trend-note">
+                <TrendingUp :size="16" />
+                <span>{{ trendHasData ? `数据来源：小红书创作者中心 · ${trendWindowLabel}每日浏览量（合计 ${trendTotal}）` : '数据来源：小红书创作者中心（平台官方数据）' }}</span>
+                <b>{{ accountInfo.loading ? '…' : (accountInfo.fans ?? '—') }} 粉丝</b>
+              </div>
             </article>
 
             <article class="ai-card panel">
