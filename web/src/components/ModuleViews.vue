@@ -72,11 +72,24 @@ const bannerTitle = computed(() => {
   return healthyCount.value === 4 ? '环境检测全部通过' : `环境检测完成（${healthyCount.value} / 4 正常）`
 })
 
+// 系统环境文案必须反映真实运行系统（原样稿写死 “macOS · 可运行”，Windows 上也照显 → 假数据）
+const envOsText = computed(() => {
+  const p = String(
+    (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '',
+  ).toLowerCase()
+  if (p.includes('win')) return 'Windows · 可运行'
+  if (p.includes('mac')) return 'macOS · 可运行'
+  if (p.includes('linux')) return 'Linux · 可运行'
+  return '本机 · 可运行'
+})
+
 async function loadRealStatus() {
   realStatus.value.loading = true
   realStatus.value.error = ''
   try {
-    const [h, m, s] = await Promise.allSettled([api.health(), api.mcpStatus(), api.settings()])
+    const [h, m, s, ai, im] = await Promise.allSettled([
+      api.health(), api.mcpStatus(), api.settings(), api.aiStatus(), api.imageStatus(),
+    ])
     if (h.status === 'fulfilled') realStatus.value.mcpService = !!h.value.ok
     if (m.status === 'fulfilled') {
       realStatus.value.mcpService = !!m.value.service
@@ -84,10 +97,19 @@ async function loadRealStatus() {
       realStatus.value.username = m.value.username || ''
       realStatus.value.account = m.value.account || ''
     }
+    // 密钥存在本机 .env，不会出现在 /api/settings 的数据行里 → 只能问「就绪接口」判断
+    // （2026-09-19 修：原按 settings 行名匹配，把已就绪的 DeepSeek 显示成「未配置」）
+    if (ai.status === 'fulfilled') {
+      realStatus.value.deepseek = !!(ai.value && ai.value.deepseek && ai.value.deepseek.ready)
+    } else {
+      realStatus.value.deepseek = false
+    }
+    if (im.status === 'fulfilled') {
+      realStatus.value.image = !!(im.value && im.value.ready)
+    } else {
+      realStatus.value.image = false
+    }
     if (s.status === 'fulfilled') {
-      const keys = (s.value.items || []).map((x) => x.key)
-      realStatus.value.deepseek = keys.some((k) => /deepseek/i.test(k))
-      realStatus.value.image = keys.some((k) => /image|qwe|img/i.test(k))
       // 读取已保存的开关状态
       const map = {}
       for (const it of (s.value.items || [])) map[it.key] = it
@@ -1799,7 +1821,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="settings-grid">
         <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">CONTENT SAFETY</span><h3>内容与发布保护</h3></div><ShieldCheck :size="19" /></div><div class="setting-rows"><div><span><b>发布前人工确认</b><small>每条内容必须点确认后才能进入队列</small></span><button type="button" aria-label="发布前人工确认" :aria-pressed="systemToggles.review" :class="['switch-control', { active: systemToggles.review }]" @click="toggleSetting('review')"><i /></button></div><div><span><b>相似度超限自动重写</b><small>达到 60% 时最多自动重写 3 次</small></span><button type="button" aria-label="相似度超限自动重写" :aria-pressed="systemToggles.rewrite" :class="['switch-control', { active: systemToggles.rewrite }]" @click="toggleSetting('rewrite')"><i /></button></div><div><span><b>允许无人值守发布</b><small>建议完成首篇引导后再开启</small></span><button type="button" aria-label="允许无人值守发布" :aria-pressed="systemToggles.publish" :class="['switch-control', { active: systemToggles.publish }]" @click="toggleSetting('publish')"><i /></button></div></div></article>
-        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>macOS · 可运行</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</button></article>
+        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>{{ envOsText }}</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</button></article>
       </div>
 
       <!-- ============ 评论自动回复（R14）============ -->

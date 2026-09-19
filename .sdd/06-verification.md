@@ -729,3 +729,45 @@ $ python validate_sdd.py "C:/Users/12543/xhs-ops-platform"
 迁移后 **10/10（完全符合）**，且零警告。
 
 **结论**：✅ 通过
+
+---
+
+## T50 系统设置「状态显示真实性」修复
+
+**验证时间**：2026-09-19 22:07
+**触发**：用户重新扫码登录后，按用户要求全量复核；登录态恢复后界面暴露 2 处「显示与真实不符」。
+
+**问题 1：DeepSeek 显示「未配置」，而后端已就绪**
+- 现象：系统设置页 DeepSeek 行显示「未配置」，环境检测 `2 / 4 正常`
+- 反而 `GET /api/ai/status` → `{"deepseek":{"ready":true,"keyMasked":"sk-REPLACED-BY-CUSTOMER-KEY"}}`
+- 根因：`ModuleViews.vue` 的 `loadRealStatus()` 用 `/api/settings` 返回的**数据行名**去匹配 `/deepseek/i`；
+  而密钥存在本机 `.env`，`/api/settings` 只有 `posts_per_day` / `reply_observation_until` 两行 → **判据恒为假**
+- 修法：改问真实「就绪接口」—— `api.aiStatus()` → `deepseek.ready`、`api.imageStatus()` → `ready`（同一处补上），请求失败则回 `false`
+
+**问题 2：系统环境写死「macOS · 可运行」**
+- 现象：Windows 机器上照样显示 macOS（原样稿遗留文案 = 零假数据红线）
+- 修法：新增 `envOsText` computed，按真实运行时平台输出 Windows / macOS / Linux
+
+**验证证据（Playwright 读真实 DOM，硬刷新后逐模块切换）**
+```
+点「系统设置」（作用域选择器 nav.main-nav button）→ 读 document.body.innerText：
+  环境检测完成（3 / 4 正常）                    ← 修复前 2 / 4
+  小红书账号 | JOIB | 授权正常
+  DeepSeek | 内容生成与复盘 | 已配置             ← 修复前「未配置」
+  QweAPI · img2.5 | 美妆与穿搭生图 | 待检测       ← 真实：生图 Key 未配置，如实显示
+  系统环境 | Windows · 可运行                   ← 修复前「macOS · 可运行」
+点「内容工坊」→ active=内容工坊；imgs 8 / broken 0 / naturalWidth===0 计 0；「AI 已就绪」
+```
+**构建与回归**：`npm run build` 13.55s 通过；`grep "^const X = ref" | uniq -d` 无重复声明。
+**结论**：✅ 通过
+
+**同轮复核（登录态恢复后，全链路真值）**
+```
+GET /api/mcp/status      → loggedIn:true, username:"JOIB"          [HTTP 200]
+GET /api/mcp/me          → 粉丝 30 / 关注 17 / 获赞 121 / 笔记 60   [HTTP 200 11.3s]
+GET /api/creator/overview→ 浏览量 119(+1222%) / 涨粉 1 / 曝光 28 / 观看 852 秒 [HTTP 200]（修复前 401→500）
+GET /api/creator/profile → name JOIB / fans 30                      [HTTP 200]
+页面：今日运营卡片真值（JOIB · 30 人 / 17 人 / 121 次）· 数据洞察 8 块全渲染
+      · 文案库查重门禁全低于 60% · 对标账号「在想月亮🌙」样本 3 条
+```
+**结论**：✅ 通过
