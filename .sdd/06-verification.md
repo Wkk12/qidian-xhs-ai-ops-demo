@@ -807,3 +807,22 @@ document.documentElement.scrollHeight > innerHeight  →  false（整页不再�
 
 **遗留说明（已如实记录）**：删除的左侧栏内 7 天清单，同一信息仍由「今日运营」顶卡与生成前预览弹窗承载；
 `base.css` 中 `.style-rail / .rail-*` 样式保留为死代码，未删除（避免波及 lab/runway 主题文件）。
+
+---
+
+## T52 界面满屏化（保留边缘圆角）
+
+**验证时间**：2026-09-19 22:20　**依据**：用户指令「占满整个屏幕，但保留边缘圆角」
+**改动**：`base.css` —— `.demo-stage { padding: 0 }`；`.app-shell` 由 `min(100%,1540px) / calc(100vh-48px) / margin:0 auto`
+改为 `width:100% / height:100vh / margin:0`；圆角声明未动（仍 `var(--radius-xl)` = 32px）。≤900px 同步满屏。
+
+**证据（Playwright 读真实 DOM，1600×950）**
+```
+.app-shell.getBoundingClientRect() → {x:0, y:0, w:1600, h:950}   ← 与视口逐值相等
+getComputedStyle(.app-shell).borderRadius → "32px"  （四角同值，圆角保留）
+getComputedStyle(.app-shell).margin → "0px" ｜ .demo-stage padding → "0px"
+documentElement.scrollWidth > innerWidth → false   ← 无横向溢出
+整页可滚 → false；.workspace 可滚 → true（导航栏仍固定，侧边栏 y=1 / h=948）
+卡片真值 30 人 / 17 人 / 121 次；破图 0；控制台 Errors 0 / Warnings 0
+```
+**结论**：✅ 通过（构建 5.24s。圆角靠 `overflow: clip` 裁切，四角露出的即页面底色 `--page`）
