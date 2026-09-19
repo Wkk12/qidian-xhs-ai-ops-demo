@@ -771,3 +771,39 @@ GET /api/creator/profile → name JOIB / fans 30                      [HTTP 200]
       · 文案库查重门禁全低于 60% · 对标账号「在想月亮🌙」样本 3 条
 ```
 **结论**：✅ 通过
+
+---
+
+## T51 界面调整：删「本周内容主线」固定栏 + 左侧导航固定
+
+**验证时间**：2026-09-19 22:15　**依据**：用户 2026-09-19 指令（ADR-012）
+**验证方式**：`npm run build` → 硬刷新页面 → Playwright 读真实 DOM（1600×950）
+
+**改动**：`App.vue` 删 `<section class="style-rail outline-rail">`；`base.css` 外壳改视口高度、内容区面板内滚动、
+去掉 250px 左内边距与两处窄屏 track 规则（≤900px 回退整页滚动）。
+
+**证据 1：目标栏已消失**
+```
+document.querySelector('.style-rail')            → null
+document.body.innerText.includes('7-DAY STORY ARC') → false
+```
+
+**证据 2：导航栏固定高度 + 固定位置（滚动前 vs 滚动后）**
+```
+.sidebar.getBoundingClientRect().top  滚动前 25  →  把 .workspace 滚 900px 后 25   ← 不变
+.sidebar 高度 900（视口 950 - 48 = 902）  ← 固定高度，不再被内容撑高
+document.documentElement.scrollHeight > innerHeight  →  false（整页不再滚动）
+.workspace.scrollTop 114 / 可滚动 true               ← 滚动转移进内容面板
+导航 7 项在滚动后仍全部完整可见（7/7）
+```
+
+**证据 3：8 模块全量走查（作用域选择器 nav.main-nav button，逐个切过去）**
+```
+今日运营 ✅ active 正确 / 0 破图｜内容工坊 ✅ imgs 8 / 破图 0 /「AI 已就绪」
+排期发布 ✅｜素材灵感 ✅｜数据洞察 ✅（浏览量等真值在）｜运营大纲 ✅｜文案库 ✅｜系统设置 ✅（本机运行状态在）
+控制台：Total messages 0（Errors 0 / Warnings 0）
+```
+**结论**：✅ 通过（构建 6.54s；8/8 模块渲染正常，无破图、无控制台报错）
+
+**遗留说明（已如实记录）**：删除的左侧栏内 7 天清单，同一信息仍由「今日运营」顶卡与生成前预览弹窗承载；
+`base.css` 中 `.style-rail / .rail-*` 样式保留为死代码，未删除（避免波及 lab/runway 主题文件）。

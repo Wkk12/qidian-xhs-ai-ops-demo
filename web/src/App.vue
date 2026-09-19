@@ -127,31 +127,6 @@ const currentView = computed(() => viewMeta[activeView.value])
 
 <template>
   <main class="demo-stage theme-atelier">
-    <section class="style-rail outline-rail" aria-label="七天内容主线">
-      <div class="rail-intro">
-        <span class="rail-kicker">7-DAY STORY ARC</span>
-        <strong>本周内容主线</strong>
-        <small>从专业种草到课程转化</small>
-      </div>
-      <button
-        v-for="(item, index) in outlineDays"
-        :key="item.day"
-        type="button"
-        :class="['style-choice', 'outline-choice', { active: selectedDay === index, done: index < 2 }]"
-        :aria-pressed="selectedDay === index"
-        @click="selectedDay = index"
-      >
-        <span class="choice-index">{{ item.day }}</span>
-        <span class="choice-copy">
-          <b>{{ item.title }}</b>
-          <small>{{ item.status }}</small>
-        </span>
-        <Check v-if="index < 2" class="outline-check" :size="14" />
-        <span v-else class="choice-dot" />
-      </button>
-      <p class="rail-note">先定大纲，再逐日生成。后一天必须承接前一天的内容结论。</p>
-    </section>
-
     <section class="app-shell">
       <aside class="sidebar">
         <div class="brand">
