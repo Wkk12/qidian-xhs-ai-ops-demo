@@ -99,6 +99,9 @@ button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 25%, 
 .nav-live { position: absolute; right: 11px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
 .sidebar-foot { margin-top: auto; display: grid; gap: 12px; }
 .account-mini { padding: 12px 10px; display: grid; grid-template-columns: 34px minmax(0, 1fr) 18px; align-items: center; gap: 9px; border-top: 1px solid var(--sidebar-line); }
+/* 左下角账号块 = 扫码登录入口（改成按钮后外形保持不变） */
+button.account-mini { width: 100%; border: 0; border-top: 1px solid var(--sidebar-line); border-radius: 12px; color: inherit; text-align: left; background: transparent; cursor: pointer; transition: background .2s ease; }
+button.account-mini:hover { background: var(--sidebar-active); }
 .account-mini .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: var(--brand-mark-ink); background: var(--accent); font-size: 12px; font-weight: 800; }
 .account-mini b, .account-mini small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .account-mini b { font-size: 11px; }
@@ -210,6 +213,17 @@ button:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 25%, 
 .gate-head small { color: var(--muted); font-size: 9px; }
 .gate-head b { margin-top: 3px; font-size: 12px; }
 .gate-pass { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-radius: 999px; color: var(--positive); background: var(--positive-soft); font-size: 9px; font-weight: 700; }
+.gate-warn { padding: 5px 8px; display: flex; align-items: center; gap: 4px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 9px; font-weight: 700; }
+/* 扫码登录窗口（沿用抽屉样式，只补二维码与提示的排版） */
+.login-qr-block { margin-top: 16px; padding: 16px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel-two); text-align: center; }
+.login-qr { width: 190px; height: 190px; margin: 0 auto; display: grid; place-items: center; padding: 8px; border-radius: 16px; background: #fff; box-shadow: 0 12px 30px -22px var(--shadow); }
+.login-qr img { width: 100%; height: 100%; display: block; border-radius: 10px; }
+.login-qr-empty { color: var(--muted); font-size: 11px; line-height: 1.7; padding: 0 10px; }
+.login-qr-hint { margin: 12px 0 0; display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--muted); font-size: 10px; }
+.login-qr-btn { width: 100%; margin-top: 12px; justify-content: center; }
+.login-qr-btn:disabled { opacity: .6; cursor: default; }
+.login-qr-steps { margin: 11px 0 0; color: var(--muted); font-size: 9px; line-height: 1.7; }
+.login-ok { margin: 10px 0 0; color: var(--positive); font-size: 11px; font-weight: 700; }
 .gate-bar { height: 7px; margin-top: 13px; overflow: hidden; border-radius: 999px; background: var(--panel-two); }
 .gate-bar i { display: block; width: 42%; height: 100%; border-radius: inherit; background: var(--positive); transform-origin: left; animation: gate-grow 1s var(--ease) both; }
 .quality-gate p { margin: 10px 0 0; color: var(--muted); font-size: 9px; line-height: 1.65; }

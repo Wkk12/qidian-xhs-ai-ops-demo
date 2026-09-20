@@ -1,6 +1,6 @@
 <script setup>
 /* finesse · register=product · shell=atelier-operations-console · motion=state-transition */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElButton } from 'element-plus'
 import 'element-plus/es/components/button/style/css'
 import ModuleViews from './components/ModuleViews.vue'
@@ -21,6 +21,7 @@ import {
   LockKeyhole,
   MoreHorizontal,
   Play,
+  RefreshCw,
   Settings,
   Sparkles,
   TrendingUp,
@@ -108,7 +109,10 @@ async function loadTrendSeries() {
     }))
     trendError.value = ''
   } catch (e) {
-    trendError.value = e.message || '读取平台数据失败'
+    const msg = String(e.message || '')
+    trendError.value = /401|未登录|失效/.test(msg)
+      ? '登录态已失效 · 点左下角扫码登录后即可恢复'
+      : '读取平台数据失败：' + (msg || '未知错误')
     trendSeries.value = []
   } finally {
     trendLoading.value = false
@@ -153,6 +157,101 @@ const trendTicks = computed(() => {
 
 const trendTotal = computed(() => trendSeries.value.reduce((a, p) => a + p.value, 0))
 const trendWindowLabel = computed(() => (trendSeries.value.length > 7 ? '近 30 天' : '近 7 天'))
+
+/* -------- 小红书扫码登录（客户机没有 Hermes，登录入口必须长在页面里） -------- */
+const loginOpen = ref(false)
+const loginState = ref({ service: true, loggedIn: false, username: '' })
+const qrImage = ref('')
+const qrLoading = ref(false)
+const qrError = ref('')
+const qrSecondsLeft = ref(0)
+const justLoggedIn = ref(false)
+let qrCountdown = null
+let loginPoll = null
+
+const qrStatusText = computed(() => {
+  if (qrLoading.value) return '正在获取二维码…'
+  if (qrError.value) return qrError.value
+  if (qrSecondsLeft.value > 0) return '等待扫码…'
+  return '二维码已过期，请点「换一张」'
+})
+
+// 登录态每次都问本机服务，不缓存（客户可能换账号，也可能刚过期）
+async function refreshLoginStatus() {
+  try {
+    const s = await api.mcpStatus()
+    loginState.value = { service: !!s.service, loggedIn: !!s.loggedIn, username: s.username || '' }
+  } catch (e) {
+    loginState.value = { service: false, loggedIn: false, username: '' }
+  }
+  return loginState.value
+}
+
+function startQrCountdown(seconds) {
+  clearInterval(qrCountdown)
+  qrSecondsLeft.value = Math.max(30, Math.round(Number(seconds) || 240)) // MCP 二维码默认 4 分钟有效
+  qrCountdown = setInterval(() => {
+    qrSecondsLeft.value = Math.max(0, qrSecondsLeft.value - 1)
+    if (qrSecondsLeft.value === 0) clearInterval(qrCountdown)
+  }, 1000)
+}
+
+async function fetchLoginQrcode() {
+  qrLoading.value = true
+  qrError.value = ''
+  clearInterval(qrCountdown)
+  try {
+    const r = await api.mcpQrcode()
+    const d = (r && r.data) || {}
+    const img = String((d && d.img) || (typeof d === 'string' ? d : '') || '')
+    if (!img.startsWith('data:image')) throw new Error('二维码返回异常')
+    qrImage.value = img
+    justLoggedIn.value = false
+    // MCP 会回 timeout（毫秒），有就按它算倒计时，没有就按 4 分钟
+    const ttl = Number(d && d.timeout)
+    startQrCountdown(ttl > 1000 ? ttl / 1000 : (ttl > 0 ? ttl : 240))
+  } catch (e) {
+    qrImage.value = ''
+    qrError.value = loginState.value.service
+      ? '获取二维码失败：' + (e.message || '未知错误')
+      : '本机服务未启动，无法获取二维码'
+  } finally {
+    qrLoading.value = false
+  }
+}
+
+// 打开登录窗口：先问登录态 → 出二维码 → 每 3 秒轮询，扫码成功即刷新页面数据
+async function openLogin() {
+  loginOpen.value = true
+  justLoggedIn.value = false
+  qrLoading.value = true // 立刻进入「获取中」，避免先显示「二维码已过期」误导用户
+  // 两个请求并行（都走 MCP，各自要几秒）
+  await Promise.allSettled([refreshLoginStatus(), fetchLoginQrcode()])
+  // 轮询登录态：每次问完再排下一次（mcpStatus 本身要约 7 秒，用 setInterval 会请求叠加）
+  clearTimeout(loginPoll)
+  const poll = async () => {
+    const s = await refreshLoginStatus()
+    if (s.loggedIn) {
+      clearInterval(qrCountdown)
+      qrSecondsLeft.value = 0
+      qrImage.value = ''
+      justLoggedIn.value = true
+      await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries()])
+      return
+    }
+    loginPoll = setTimeout(poll, 4000)
+  }
+  loginPoll = setTimeout(poll, 4000)
+}
+
+function closeLogin() {
+  loginOpen.value = false
+  clearTimeout(loginPoll)
+  clearInterval(qrCountdown)
+}
+
+onUnmounted(closeLogin)
+onMounted(refreshLoginStatus) // 首帧就把左下角登录态显示成真值
 
 
 const metrics = computed(() => [
@@ -221,11 +320,14 @@ const currentView = computed(() => viewMeta[activeView.value])
             <Settings :size="18" :stroke-width="1.8" />
             <span>系统设置</span>
           </button>
-          <div class="account-mini">
-            <span class="avatar">{{ (accountInfo.nickname || '?').charAt(0).toUpperCase() }}</span>
-            <span><b>{{ accountInfo.nickname || '未登录' }}</b><small>{{ accountInfo.nickname ? '授权正常' : (accountInfo.loading ? '检测中…' : '未登录') }}</small></span>
+          <button class="account-mini" type="button" aria-label="小红书扫码登录" title="点此扫码登录 / 换账号" @click="openLogin">
+            <span class="avatar">{{ (loginState.username || accountInfo.nickname || '?').charAt(0).toUpperCase() }}</span>
+            <span>
+              <b>{{ loginState.username || accountInfo.nickname || '未登录' }}</b>
+              <small>{{ (loginState.username || accountInfo.nickname) ? '授权正常 · 点此换号' : (accountInfo.loading ? '检测中…' : '未登录 · 点此扫码登录') }}</small>
+            </span>
             <MoreHorizontal :size="18" />
-          </div>
+          </button>
         </div>
       </aside>
 
@@ -348,7 +450,7 @@ const currentView = computed(() => viewMeta[activeView.value])
                   </g>
                 </svg>
                 <p v-else class="chart-empty">
-                  {{ trendLoading ? '正在读取平台数据…' : (trendError ? '读取平台数据失败：' + trendError : `${trendWindowLabel}暂无浏览量数据 · 平台数据积累中`) }}
+                  {{ trendLoading ? '正在读取平台数据…' : (trendError || `${trendWindowLabel}暂无浏览量数据 · 平台数据积累中`) }}
                 </p>
               </div>
               <div class="trend-note">
@@ -428,6 +530,44 @@ const currentView = computed(() => viewMeta[activeView.value])
             <span><Image :size="15" /> 6 张配图</span>
           </div>
           <ElButton class="preview-cta" type="primary" round @click="previewOpen = false">确认大纲与原创度</ElButton>
+        </aside>
+      </div>
+    </Transition>
+
+    <!-- ============ 小红书扫码登录（客户端无 Hermes，必须自带登录入口）============ -->
+    <Transition name="drawer">
+      <div v-if="loginOpen" class="preview-layer" @click.self="closeLogin">
+        <aside class="preview-card" aria-label="小红书扫码登录">
+          <header>
+            <span><LockKeyhole :size="17" /> 小红书扫码登录</span>
+            <button type="button" aria-label="关闭登录窗口" @click="closeLogin">×</button>
+          </header>
+
+          <section class="quality-gate">
+            <div class="gate-head">
+              <span class="gate-icon"><Check :size="18" /></span>
+              <div>
+                <small>当前登录账号</small>
+                <b>{{ loginState.loggedIn ? (loginState.username || '已登录') : (loginState.service ? '未登录' : '本机服务未启动') }}</b>
+              </div>
+              <span v-if="loginState.loggedIn" class="gate-pass"><Check :size="13" /> 授权正常</span>
+              <span v-else class="gate-warn"><LockKeyhole :size="13" /> 待登录</span>
+            </div>
+            <p v-if="justLoggedIn" class="login-ok">登录成功，账号与数据已刷新。</p>
+            <p v-else>登录态保存在本机，不用每次打开都扫码；失效时回到这里再扫一次即可。扫码也可以直接换成另一个账号。</p>
+          </section>
+
+          <section class="login-qr-block">
+            <div class="login-qr">
+              <img v-if="qrImage" :src="qrImage" alt="小红书登录二维码" />
+              <div v-else class="login-qr-empty">{{ qrStatusText }}</div>
+            </div>
+            <p class="login-qr-hint"><Clock3 :size="13" /> {{ qrSecondsLeft > 0 ? `二维码 ${qrSecondsLeft} 秒后失效` : qrStatusText }}</p>
+            <button class="primary-button glass-button login-qr-btn" type="button" :disabled="qrLoading" @click="fetchLoginQrcode">
+              <RefreshCw :size="15" />{{ qrLoading ? '获取中…' : '换一张二维码' }}
+            </button>
+            <p class="login-qr-steps">打开【小红书 App】→ 左上角「扫一扫」→ 扫描后在手机上确认登录。</p>
+          </section>
         </aside>
       </div>
     </Transition>
