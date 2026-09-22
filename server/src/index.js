@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, now, log } from './db.js';
-import { mcp, extractMetrics } from './mcp.js';
+import { mcp, extractMetrics, circuitState } from './mcp.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
@@ -62,13 +62,36 @@ app.get('/api/health', async () => ({
 }));
 
 // ---------- MCP 状态（登录/服务）----------
-app.get('/api/mcp/status', async () => {
+// TTL 缓存（2026-09-21 加）：登录弹窗会持续轮询本接口，多开标签页会成倍打到 MCP。
+// 实测：不退避的轮询让 MCP 每 5 秒被无效请求打磨 → 错误日志 2 天涨到 33.8MB。
+// 这里做 8 秒内的结果合并：N 个客户端在 8 秒内轮询，MCP 只被真实调用 1 次。
+//
+// 🔴 自适应退避（2026-09-22 加）：实测发现持续轮询已把小号拉进小红书的
+//    风控「安全限制 300013 / 访问频繁」→ 登录页被拦、二维码取不到。
+//    因此：异常/未登录状态下把 TTL 拉长到 5 分钟，避免继续火上浇油；
+//    只有「已登录」的正常态才用 8 秒短缓存。
+const STATUS_TTL_MS = Number(process.env.XHS_MCP_STATUS_TTL || 8000);
+const STATUS_TTL_BLOCKED_MS = Number(process.env.XHS_MCP_STATUS_TTL_BLOCKED || 5 * 60 * 1000);
+let _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };
+
+function _ttlFor(d) {
+  // 已登录且服务正常 → 短缓存（用户正等着扫码后的状态刷新）
+  if (d && d.service && d.loggedIn) return STATUS_TTL_MS;
+  // 服务异常 / 未登录 / 熔断 → 长缓存（可能是被封或登录态失效，别继续打）
+  return STATUS_TTL_BLOCKED_MS;
+}
+
+async function computeMcpStatus() {
   const out = { service: false, loggedIn: false };
   try {
     const h = await mcp.health();
     out.service = h?.status === 'healthy' || h?.success === true;
     out.account = h?.data?.account;
-  } catch (e) { out.serviceError = e.message; return out; }
+  } catch (e) {
+    out.serviceError = e.message;
+    out.circuit = circuitState();
+    return out;
+  }
   try {
     const s = await mcp.loginStatus();
     out.loggedIn = s?.data?.is_logged_in === true;
@@ -78,8 +101,42 @@ app.get('/api/mcp/status', async () => {
       db.prepare(`INSERT INTO accounts (platform,nickname,user_id,is_logged_in,updated_at)
                   VALUES ('xiaohongshu',?,?,1,?)`).run(out.username || '', out.userId || '', now());
     }
-  } catch (e) { out.loginError = e.message; }
+  } catch (e) {
+    out.loginError = e.message;
+  }
+  out.circuit = circuitState();
   return out;
+}
+
+app.get('/api/mcp/status', async () => {
+  const age = Date.now() - _statusCache.at;
+  if (_statusCache.data && age < _statusCache.ttl) {
+    return { ..._statusCache.data, cached: true, cacheAgeMs: age, cacheTtlMs: _statusCache.ttl };
+  }
+  // 并发合并：同时到达的请求共用同一次真实调用
+  if (!_statusCache.inflight) {
+    _statusCache.inflight = computeMcpStatus()
+      .then((d) => {
+        const ttl = _ttlFor(d);
+        _statusCache = { at: Date.now(), data: d, inflight: null, ttl };
+        return d;
+      })
+      .catch((e) => {
+        _statusCache.inflight = null;
+        throw e;
+      });
+  }
+  const fresh = await _statusCache.inflight;
+  return { ...fresh, cached: false, cacheTtlMs: _statusCache.ttl };
+});
+
+/** 熔断器状态（供前端/排障查看，不触发任何 MCP 调用） */
+app.get('/api/mcp/circuit', async () => ({ ok: true, circuit: circuitState() }));
+
+/** 手动清状态缓存（排障用：扫码成功后想立刻刷新可调它） */
+app.post('/api/mcp/status/refresh', async () => {
+  _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };
+  return { ok: true, cleared: true };
 });
 
 app.get('/api/mcp/qrcode', async () => {

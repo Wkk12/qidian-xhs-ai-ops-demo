@@ -14,7 +14,42 @@ import { log } from './db.js';
 const BASE = process.env.XHS_MCP_BASE || 'http://localhost:18060';
 const TIMEOUT = Number(process.env.XHS_MCP_TIMEOUT || 180000);
 
+// ---------- 熔断器：保护 MCP 不被「无效请求风暴」打磨（2026-09-21 加） ----------
+// 背景实测：前端登录轮询不退避、不停止，每 5 秒打一次 login/status；
+// 登录态失效时 MCP 每次都抛 panic 堆栈 → 错误日志 2 天涨到 33.8MB，且越拖越慢。
+// 策略：窗口内累计 N 次「服务端错误/网络错误」即跳闸，冷却期内直接快速失败（不碰 MCP）。
+const CB_THRESHOLD = Number(process.env.XHS_MCP_CB_THRESHOLD || 3);    // 跳闸阈值
+const CB_WINDOW_MS = Number(process.env.XHS_MCP_CB_WINDOW || 60000);   // 统计窗口 60s
+const CB_OPEN_MS = Number(process.env.XHS_MCP_CB_OPEN || 30000);       // 跳闸冷却 30s
+let _cbUntil = 0;
+let _cbFails = [];
+let _cbOpenedAt = 0;
+
+export function circuitState() {
+  return { open: Date.now() < _cbUntil, remainingMs: Math.max(0, _cbUntil - Date.now()), fails: _cbFails.length };
+}
+function _cbNoteFail() {
+  const now = Date.now();
+  _cbFails = _cbFails.filter((t) => now - t < CB_WINDOW_MS);
+  _cbFails.push(now);
+  if (_cbFails.length >= CB_THRESHOLD) {
+    _cbUntil = now + CB_OPEN_MS;
+    _cbOpenedAt = now;
+    log('warn', 'mcp', `熔断器跳闸：${CB_WINDOW_MS / 1000}s 内失败 ${_cbFails.length} 次 → 暂停调用 ${CB_OPEN_MS / 1000}s`);
+  }
+}
+function _cbNoteOk() { _cbFails = []; _cbUntil = 0; }
+
 async function call(pathname, { method = 'GET', body, params, timeout } = {}) {
+  // 跳闸中 → 快速失败，不产生任何到 MCP 的请求
+  const remain = _cbUntil - Date.now();
+  if (remain > 0) {
+    throw Object.assign(
+      new Error(`MCP 熔断保护中（${Math.ceil(remain / 1000)}s 后自动恢复）`),
+      { status: 503, circuitOpen: true },
+    );
+  }
+
   const url = new URL(BASE + pathname);
   if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 
@@ -31,10 +66,18 @@ async function call(pathname, { method = 'GET', body, params, timeout } = {}) {
     const text = await res.text();
     let data;
     try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    if (!res.ok) {
+      // 只有 5xx / 网络层错误才算「MCP 有问题」；4xx 是参数/业务错，不该跳闸
+      if (res.status >= 500) _cbNoteFail();
+      log('error', 'mcp', `${method} ${pathname} -> ${res.status} ${Date.now() - t0}ms`);
+      throw Object.assign(new Error(data?.error || `HTTP ${res.status}`), { status: res.status, data });
+    }
+    _cbNoteOk();
     log('info', 'mcp', `${method} ${pathname} -> ${res.status} ${Date.now() - t0}ms`);
-    if (!res.ok) throw Object.assign(new Error(data?.error || `HTTP ${res.status}`), { status: res.status, data });
     return data;
   } catch (e) {
+    // 网络错误/超时也计入（fetch 抛异常时没有 status）
+    if (!e.status) _cbNoteFail();
     log('error', 'mcp', `${method} ${pathname} 失败: ${e.message}`);
     throw e;
   } finally {

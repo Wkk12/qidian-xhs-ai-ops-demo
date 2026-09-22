@@ -164,6 +164,7 @@ const loginState = ref({ service: true, loggedIn: false, username: '' })
 const qrImage = ref('')
 const qrLoading = ref(false)
 const qrError = ref('')
+const pollFails = ref(0) // 登录轮询连续失败计数（用于指数退避，避免打磨 MCP）
 const qrSecondsLeft = ref(0)
 const justLoggedIn = ref(false)
 let qrCountdown = null
@@ -227,9 +228,18 @@ async function openLogin() {
   qrLoading.value = true // 立刻进入「获取中」，避免先显示「二维码已过期」误导用户
   // 两个请求并行（都走 MCP，各自要几秒）
   await Promise.allSettled([refreshLoginStatus(), fetchLoginQrcode()])
-  // 轮询登录态：每次问完再排下一次（mcpStatus 本身要约 7 秒，用 setInterval 会请求叠加）
+  // 轮询登录态（2026-09-21 重写）：
+  // 旧版固定 4 秒一次、不退避、切到后台还继续跑 —— 实测把 MCP 打磨到错误日志 33.8MB。
+  // 现策略：① 页面不可见时不轮询（切回来立刻补一次）
+  //        ② 服务异常时指数退避 4→8→16→32→60s
+  //        ③ 连续失败 10 次即彻底停止，留「换一张」按钮让用户主动重试
   clearTimeout(loginPoll)
+  pollFails.value = 0
   const poll = async () => {
+    if (document.hidden) {
+      loginPoll = setTimeout(poll, 3000)
+      return
+    }
     const s = await refreshLoginStatus()
     if (s.loggedIn) {
       clearInterval(qrCountdown)
@@ -239,9 +249,26 @@ async function openLogin() {
       await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries()])
       return
     }
-    loginPoll = setTimeout(poll, 4000)
+    // 服务正常（只是没扫码）→ 保持 4 秒；服务异常 → 退避
+    if (s.service) pollFails.value = 0
+    else pollFails.value += 1
+
+    if (pollFails.value >= 10) {
+      qrError.value = '本机服务连接异常，已暂停自动刷新；修好后点上方「换一张」重新获取'
+      return
+    }
+    const delay = s.service ? 4000 : Math.min(60000, 4000 * Math.pow(2, Math.min(pollFails.value, 4)))
+    loginPoll = setTimeout(poll, delay)
   }
   loginPoll = setTimeout(poll, 4000)
+}
+
+// 页面从后台切回前台时，若登录弹窗还开着就立刻补问一次（不必等退避）
+function onVisibilityChange() {
+  if (!document.hidden && loginOpen.value && !loginState.value.loggedIn) {
+    clearTimeout(loginPoll)
+    loginPoll = setTimeout(() => { if (loginOpen.value) refreshLoginStatus() }, 300)
+  }
 }
 
 function closeLogin() {
@@ -252,6 +279,8 @@ function closeLogin() {
 
 onUnmounted(closeLogin)
 onMounted(refreshLoginStatus) // 首帧就把左下角登录态显示成真值
+onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
+onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange))
 
 
 const metrics = computed(() => [
