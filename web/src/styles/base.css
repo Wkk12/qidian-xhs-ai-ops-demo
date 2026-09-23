@@ -196,10 +196,7 @@ button.account-mini:hover { background: var(--sidebar-active); }
 .ai-steps i { flex: 1; min-width: 12px; height: 1px; background: var(--ai-line); }
 .ai-action { position: relative; z-index: 1; width: 100%; min-height: 36px; margin-top: 17px; display: flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--ai-line); border-radius: 12px; color: var(--ai-ink); background: var(--ai-button); cursor: pointer; }
 
-.theme-caption { position: fixed; z-index: 25; right: 38px; bottom: 34px; padding: 8px 11px 8px 8px; display: flex; align-items: center; gap: 9px; border: 1px solid var(--glass-border); border-radius: 15px; color: var(--ink); background: var(--glass-bg); backdrop-filter: blur(20px); box-shadow: 0 18px 45px -28px var(--shadow); }
-.theme-caption > span { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: var(--button-ink); background: var(--accent); font-size: 11px; font-weight: 800; }
-.theme-caption b, .theme-caption small { display: block; }
-.theme-caption b { font-size: 10px; }.theme-caption small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+/* .theme-caption 常驻悬浮徽章已移除：旧版装饰件，写死「原创度门禁已开启」且遮挡趋势图 */
 
 .preview-layer { position: fixed; z-index: 80; inset: 0; padding: 28px; display: flex; justify-content: flex-end; background: color-mix(in srgb, var(--shadow) 25%, transparent); backdrop-filter: blur(8px); }
 .preview-card { width: min(390px, 100%); height: 100%; padding: 18px; overflow-y: auto; border: 1px solid var(--glass-border); border-radius: 28px; color: var(--ink); background: var(--surface); box-shadow: 0 32px 90px -35px var(--shadow); }
@@ -225,7 +222,7 @@ button.account-mini:hover { background: var(--sidebar-active); }
 .login-qr-steps { margin: 11px 0 0; color: var(--muted); font-size: 9px; line-height: 1.7; }
 .login-ok { margin: 10px 0 0; color: var(--positive); font-size: 11px; font-weight: 700; }
 .gate-bar { height: 7px; margin-top: 13px; overflow: hidden; border-radius: 999px; background: var(--panel-two); }
-.gate-bar i { display: block; width: 42%; height: 100%; border-radius: inherit; background: var(--positive); transform-origin: left; animation: gate-grow 1s var(--ease) both; }
+.gate-bar i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--positive); transform-origin: left; animation: gate-grow 1s var(--ease) both; }
 .quality-gate p { margin: 10px 0 0; color: var(--muted); font-size: 9px; line-height: 1.65; }
 .drawer-outline { margin-top: 12px; padding: 14px 12px; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); }
 .drawer-title { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 700; }
@@ -271,7 +268,6 @@ button.account-mini:hover { background: var(--sidebar-active); }
   .app-shell { height: auto; min-height: 100vh; }
   .workspace { overflow-y: visible; }
   .sidebar { display: none; }
-  .theme-caption { right: 22px; bottom: 20px; }
 }
 
 @media (max-width: 640px) {
@@ -288,7 +284,6 @@ button.account-mini:hover { background: var(--sidebar-active); }
   .metric-card > strong { font-size: 20px; }
   .post-state { display: none; }
   .post-row { grid-template-columns: 46px 42px minmax(0, 1fr) 16px; }
-  .theme-caption { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

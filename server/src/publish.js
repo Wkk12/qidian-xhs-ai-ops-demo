@@ -254,14 +254,49 @@ export async function runTask(taskId, { skipPrecheck = false } = {}) {
   }
 }
 
-/* ---------------- 调度器（每 60 秒） ---------------- */
+/* ---------------- 调度器（每 60 秒，可暂停） ----------------
+ * 2026-09-23 改造：原前端「自动发布调度 · 已开启」是写死文案，服务端也从不读任何开关
+ * → 双向假数据。现在开关真实落在本机 settings 表（key=scheduler_enabled），
+ *   默认 '1'（开启），与改造前行为一致；暂停期间不自动扫描，手动「立即发布」不受影响。
+ */
+
+const SCHEDULER_KEY = 'scheduler_enabled';
 
 let ticking = false;
+let lastTickAt = null;   // 最近一次真正执行扫描的时间（暂停期间不更新）
+
+export function isSchedulerEnabled() {
+  const row = db.prepare('SELECT value FROM settings WHERE key=?').get(SCHEDULER_KEY);
+  return row ? String(row.value) !== '0' : true;
+}
+
+export function setSchedulerEnabled(enabled) {
+  const v = enabled ? '1' : '0';
+  db.prepare(`INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)
+              ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+    .run(SCHEDULER_KEY, v, now());
+  log('warn', 'publish', `自动发布调度已${enabled ? '开启' : '暂停'}`);
+  return isSchedulerEnabled();
+}
+
+// 给前端读的真实状态（前端不允许再写死「已开启」）
+export function schedulerState() {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM publish_tasks WHERE status='pending'").get();
+  return {
+    enabled: isSchedulerEnabled(),
+    intervalSec: 60,
+    preMinutes: PRE_MINUTES,
+    lastTickAt,
+    pending: row ? row.n : 0,
+  };
+}
 
 export async function tick() {
   if (ticking) return;
   ticking = true;
   try {
+    if (!isSchedulerEnabled()) return;   // 暂停中：不扫描、不发布
+    lastTickAt = now();
     const tasks = db.prepare("SELECT * FROM publish_tasks WHERE status='pending' ORDER BY scheduled_at ASC LIMIT 10").all();
     for (const t of tasks) {
       const when = parseWhen(t.scheduled_at);
@@ -289,5 +324,5 @@ export async function tick() {
 
 export function startScheduler() {
   setInterval(() => { tick().catch(() => {}); }, 60 * 1000);
-  log('info', 'publish', '发布调度器已启动（每 60 秒扫描）');
+  log('info', 'publish', `发布调度器已启动（每 60 秒扫描，当前${isSchedulerEnabled() ? '开启' : '暂停'}）`);
 }

@@ -1,7 +1,14 @@
 /**
  * 前端 API 客户端 —— 统一走 /api（Vite 代理到本地服务 8787）
  * 所有真实数据从这里进，页面不再用假数据。
+ *
+ * 2026-09-23 加：统一错误处理 + 登录态守卫
+ *   以前各调用点各自 catch，登录失效时只有少数地方有提示，其它地方白屏。
+ *   现在这里统一识别 401/403（登录失效）与 MCP 熔断，交给 requestGuard 弹全局提示；
+ *   并把 HTTP 状态挂到 Error.status 上，调用方可按状态分支。
  */
+import { notifyAuthExpired, notifyServiceDegraded, looksLikeAuthError } from './requestGuard.js'
+
 const BASE = '/api'
 
 async function req(path, options = {}) {
@@ -12,7 +19,19 @@ async function req(path, options = {}) {
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok || data.ok === false) {
-    throw new Error(data.error || `HTTP ${res.status}`)
+    const message = data.error || `HTTP ${res.status}`
+    const err = new Error(message)
+    err.status = res.status
+    err.data = data
+    if (res.status === 401 || res.status === 403) {
+      notifyAuthExpired(path, message)
+    } else if (data && data.circuitOpen) {
+      notifyServiceDegraded(message)
+    } else if (res.status >= 500 && looksLikeAuthError(message)) {
+      // MCP 在登录失效时不一定回 401，可能直接抛 panic 变成 500 —— 兜住这一档
+      notifyAuthExpired(path, message)
+    }
+    throw err
   }
   return data
 }
@@ -79,6 +98,9 @@ export const api = {
   cancelPubTask: (id) => req(`/publish/tasks/${id}/cancel`, { method: 'POST', body: {} }),
   runPubTask: (id) => req(`/publish/tasks/${id}/run`, { method: 'POST', body: {} }),
   publishNow: (contentId) => req('/publish/now', { method: 'POST', body: { contentId } }),
+  // 自动发布调度真实开关（2026-09-23 加）
+  schedulerState: () => req('/publish/scheduler'),
+  setSchedulerState: (enabled) => req('/publish/scheduler', { method: 'POST', body: { enabled: !!enabled } }),
 
   // 查重门禁
   checkDuplicate: (payload) => req('/duplicate/check', { method: 'POST', body: payload }),

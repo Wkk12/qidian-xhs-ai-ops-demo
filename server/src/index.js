@@ -22,7 +22,7 @@ import {
   takeover, resumeAuto, listTakeover, matchKnowledge,
 } from './comments.js';
 import { discover, analyzeAuthor, analyzeAll, listCompetitors, addCompetitor, removeCompetitor, enrich, enrichTimes } from './competitors.js';
-import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick } from './publish.js';
+import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick, schedulerState, setSchedulerEnabled } from './publish.js';
 import { deepseekReady, deepseekInfo } from './deepseek.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -518,6 +518,16 @@ app.post('/api/publish/now', async (req) => {
 // 手动触发一次调度（排障用）
 app.post('/api/publish/tick', async () => { await tick(); return { ok: true, tasks: listTasks() }; });
 
+// 自动发布调度：真实开关（开关存本机 settings 表，刷新/重启后仍生效）
+// 2026-09-23 加：前端原来写死「已开启」，服务端也无开关 → 现在双向真。
+app.get('/api/publish/scheduler', async () => ({ ok: true, ...schedulerState() }));
+
+app.post('/api/publish/scheduler', async (req) => {
+  const enabled = !!(req.body || {}).enabled;
+  setSchedulerEnabled(enabled);
+  return { ok: true, ...schedulerState() };
+});
+
 // ---------- 查重门禁（60%，本地计算零成本） ----------
 app.post('/api/duplicate/check', async (req) => {
   const b = req.body || {};
@@ -527,7 +537,7 @@ app.post('/api/duplicate/check', async (req) => {
   });
   return {
     ok: true,
-    score: Number((r.score * 100).toFixed(1)),
+    score: Math.round(r.score * 100),
     threshold: r.threshold * 100,
     pass: r.pass,
     parts: {
@@ -536,7 +546,7 @@ app.post('/api/duplicate/check', async (req) => {
       viewpoint: Number((r.parts.viewpoint * 100).toFixed(0)),
       expression: Number((r.parts.expression * 100).toFixed(0)),
     },
-    mostSimilar: r.top ? { id: r.top.id, title: r.top.title, score: Number((r.top.score * 100).toFixed(1)) } : null,
+    mostSimilar: r.top ? { id: r.top.id, title: r.top.title, score: Math.round(r.top.score * 100) } : null,
     compared: r.compared,
   };
 });

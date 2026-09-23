@@ -206,7 +206,7 @@ const analyticsKpis = computed(() => {
   const list = myNotes.value
   const sum = (k) => list.reduce((a, b) => a + (Number(b[k]) || 0), 0)
   const pending = notesLoading.value
-  const tag = notesError.value ? '读取失败' : (pending ? '读取中…' : '真实数据')
+  const tag = notesError.value ? '读取失败' : (pending ? '读取中…' : '')
   return [
     { label: '我的笔记', value: pending ? '…' : String(list.length), delta: tag },
     { label: '总点赞', value: pending ? '…' : sum('liked').toLocaleString(), delta: tag },
@@ -283,7 +283,9 @@ const libraryRows = computed(() =>
       title: it.title || '(无标题)',
       topic: source,
       status: STATUS_MAP[it.status] || it.status || '草稿',
-      similarity: typeof it.dup_score === 'number' ? it.dup_score : null,
+      // dup_score 在后端按 0–1 比率存储（generate.js / index.js 查重回写均为 0–1），
+      // 展示统一 ×100 成百分数，与 329 行 weeklyContents 的写法保持同一量纲
+      similarity: typeof it.dup_score === 'number' ? Math.round(it.dup_score * 100) : null,
       date: (it.created_at || '').slice(5, 10).replace('-', '/'),
     }
   }),
@@ -355,8 +357,8 @@ const onViewChange = (v) => {
   if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadManual() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
   if (v === 'library') loadLibrary()
-  if (v === 'schedule') { loadContents(); loadPublish(true) }
-  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning(); loadCompetitors() }
+  if (v === 'schedule') { loadContents(); loadPublish(true); loadScheduler() }
+  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning(); loadCompetitors(); loadWeekPlan() }
 }
 /* -------- 内容趋势（真实：来自每日采集的指标快照） -------- */
 const metricsRows = ref([])
@@ -703,6 +705,59 @@ const precheckResult = ref(null)
 const precheckFor = ref(null)
 const pubRunning = ref(null)
 
+/* -------- 自动发布调度开关（真实状态，2026-09-23 加）--------
+ * 改造前：「自动发布调度 · 已开启」是写死文案，开关也是死的（服务端根本不读任何开关）。
+ * 现在开关真的落在后端 settings 表，前端只显示后端返回的真实状态；
+ * 读不到就显示「状态未知」，绝不假装已开启。
+ */
+const sched = ref({ enabled: false, intervalSec: 60, preMinutes: 15, lastTickAt: null, pending: 0 })
+const schedLoading = ref(true)
+const schedSaving = ref(false)
+const schedError = ref('')
+
+const schedText = computed(() => {
+  if (schedError.value) return '状态未知'
+  if (schedLoading.value) return '读取中…'
+  return sched.value.enabled ? '已开启' : '已暂停'
+})
+
+const schedDetail = computed(() => {
+  if (schedError.value) return schedError.value
+  const s = sched.value
+  if (!s.enabled) return '已暂停：到点不会自动发布，手动「立即发布」仍可用'
+  const last = s.lastTickAt ? ` · 最近扫描 ${String(s.lastTickAt).slice(11, 16)}` : ' · 尚未扫描过'
+  return `每 ${s.intervalSec || 60} 秒扫描 · 到点前 ${s.preMinutes || 15} 分钟预检${last}`
+})
+
+async function loadScheduler() {
+  schedLoading.value = true
+  schedError.value = ''
+  try {
+    const r = await api.schedulerState()
+    sched.value = { ...sched.value, ...r }
+  } catch (e) {
+    schedError.value = '读取调度状态失败：' + (e.message || '')
+  } finally {
+    schedLoading.value = false
+  }
+}
+
+async function toggleScheduler() {
+  if (schedSaving.value || schedError.value) return
+  const next = !sched.value.enabled
+  schedSaving.value = true
+  try {
+    const r = await api.setSchedulerState(next)
+    sched.value = { ...sched.value, ...r }
+    showNotice(next ? '自动发布调度已开启' : '自动发布调度已暂停（手动发布不受影响）')
+  } catch (e) {
+    showNotice('切换失败：' + (e.message || ''))
+    await loadScheduler()   // 失败就回读真实状态，不留下一个假开关
+  } finally {
+    schedSaving.value = false
+  }
+}
+
 async function loadPublish(pickBest = false) {
   pubLoading.value = true
   pubError.value = ''
@@ -1025,6 +1080,71 @@ async function savePositioning() {
 
 const weekTotal = computed(() => postsPerDay.value * 7)
 
+/* -------- 本周大纲（真实读 /api/plans，2026-09-23 加）--------
+ * 改造前：「本周主线：找到适合自己的风格」「3 / 7 天」「认知建立阶段进行中」全是写死的。
+ * 现在真读 plans 表：有记录就显示真实主线与真实节点进度；没有就明确说「还没有创建」，
+ * 不编一条看起来很像的主线糊上去。
+ */
+const weekPlan = ref(null)
+const weekPlanLoading = ref(false)
+const weekPlanError = ref('')
+
+const weekPlanNodes = computed(() => {
+  const p = weekPlan.value
+  if (!p) return []
+  try {
+    const arr = JSON.parse(p.nodes || '[]')
+    return Array.isArray(arr) ? arr : []
+  } catch { return [] }
+})
+const weekPlanTotal = computed(() => weekPlanNodes.value.length)
+const weekPlanDone = computed(() => weekPlanNodes.value.filter(
+  (n) => n && (n.status === 'done' || n.done === true || n.completed === true),
+).length)
+const weekPlanPercent = computed(() => (
+  weekPlanTotal.value ? Math.round((weekPlanDone.value / weekPlanTotal.value) * 100) : 0
+))
+const weekPlanMeta = computed(() => {
+  const p = weekPlan.value
+  if (!p) return ''
+  const bits = []
+  if (p.week_start) bits.push('周起始 ' + String(p.week_start).slice(0, 10))
+  const st = { drafting: '草拟中', active: '执行中', running: '执行中', done: '已完成' }[p.status]
+  bits.push(st || (p.status ? '状态 ' + p.status : '状态未标注'))
+  bits.push(weekPlanTotal.value ? `共 ${weekPlanTotal.value} 个节点` : '暂无节点')
+  return bits.join(' · ')
+})
+const positioningReady = computed(() => {
+  const p = positioning.value || {}
+  return !!(p.persona || p.audience || p.tone || p.selling || p.goal)
+})
+
+async function loadWeekPlan() {
+  weekPlanLoading.value = true
+  weekPlanError.value = ''
+  try {
+    const r = await api.plans()
+    weekPlan.value = (r.items || [])[0] || null
+  } catch (e) {
+    weekPlan.value = null
+    weekPlanError.value = '读取本周大纲失败：' + (e.message || '')
+  } finally {
+    weekPlanLoading.value = false
+  }
+}
+
+// 故事线节点状态：按内容真实状态显示（原来按下标写死「已完成 / 今天重点执行」= 假进度）
+const STORY_HINT = {
+  published: '已发布',
+  scheduled: '已排期 · 等发布',
+  approved: '已通过 · 待排期',
+  rejected: '已退回 · 需修改',
+  draft: '草稿 · 未通过门禁',
+}
+function nodeHint(item) {
+  return STORY_HINT[item.rawStatus] || (item.rawStatus ? '状态 ' + item.rawStatus : '状态未知')
+}
+
 /* -------- 平台数据（创作者中心：浏览量/涨粉/曝光，真数据） -------- */
 const creatorData = ref(null)
 const creatorLoading = ref(false)
@@ -1222,12 +1342,12 @@ onBeforeUnmount(() => {
   <section class="module-view">
     <template v-if="props.activeView === 'studio'">
       <div class="module-toolbar panel">
-        <div><span class="section-label">生成方案</span><h2>一周内容批量创作</h2><p>先锁定连续大纲，再生成 7 条可逐篇编辑的内容。</p></div>
+        <div><span class="section-label">生成方案</span><h2>一周内容批量创作</h2><p>先锁定连续大纲，再生成 {{ genDays * genPostsPerDay }} 条可逐篇编辑的内容。</p></div>
         <div class="config-pills" aria-label="生成配置">
-          <span><b>7</b> 天</span><span><b>1</b> 条/天</span><span><b>6</b> 图/条</span><span><b>图文</b> 类型</span>
+          <span><b>{{ genDays }}</b> 天</span><span><b>{{ genPostsPerDay }}</b> 条/天</span><span>共 <b>{{ genDays * genPostsPerDay }}</b> 条</span>
         </div>
         <ElButton class="module-primary" type="primary" round :loading="genRunning" @click="runGenerate">
-          <Sparkles :size="16" />{{ generating ? '正在生成...' : '重新生成 7 天草稿' }}
+          <Sparkles :size="16" />{{ genRunning ? '正在生成...' : `重新生成 ${genDays} 天草稿` }}
         </ElButton>
       </div>
 
@@ -1361,8 +1481,10 @@ onBeforeUnmount(() => {
           <small>已发布 {{ pubTasks.filter(t => t.status === 'done').length }} · 失败 {{ pubTasks.filter(t => t.status === 'failed').length }}</small></div>
         </article>
         <article class="auto-card panel">
-          <div><span class="section-label">自动发布调度</span><strong>已开启</strong><small>每分钟扫描 · 到点前 15 分钟预检</small></div>
-          <button type="button" class="switch-control active" aria-pressed="true"><i /></button>
+          <div><span class="section-label">自动发布调度</span><strong>{{ schedText }}</strong><small>{{ schedDetail }}</small></div>
+          <button type="button" :class="['switch-control', { active: sched.enabled }]" :aria-pressed="sched.enabled"
+                  :disabled="schedSaving || schedLoading || !!schedError" aria-label="自动发布调度开关"
+                  @click="toggleScheduler"><i /></button>
         </article>
         <article class="safe-card panel"><ShieldCheck :size="22" /><div><strong>发布保护</strong><small>登录态 · 查重 · 配图 · 正文 · 发布间隔，五项全过才发送</small></div></article>
       </div>
@@ -1785,12 +1907,25 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="outline-overview panel">
-        <div><span class="section-label">WEEKLY STORY ARC</span><h2>本周主线：找到适合自己的风格</h2><p>让用户从“我不会”逐步走到“我愿意来做一次专业诊断”。</p></div>
-        <div class="arc-progress"><span><b>3</b> / 7 天</span><i><em /></i><small>认知建立阶段进行中</small></div>
+        <template v-if="weekPlan">
+          <div><span class="section-label">WEEKLY STORY ARC</span><h2>本周主线：{{ weekPlan.theme || '(未填主线)' }}</h2><p>{{ weekPlanMeta }}</p></div>
+          <div class="arc-progress"><span><b>{{ weekPlanDone }}</b> / {{ weekPlanTotal }} 天</span><i><em :style="`width:${weekPlanPercent}%`" /></i><small>节点完成 {{ weekPlanPercent }}%</small></div>
+        </template>
+        <template v-else-if="weekPlanError">
+          <div><span class="section-label">WEEKLY STORY ARC</span><h2>本周主线：读取失败</h2><p>{{ weekPlanError }}</p></div>
+        </template>
+        <template v-else-if="weekPlanLoading">
+          <div><span class="section-label">WEEKLY STORY ARC</span><h2>本周主线：读取中…</h2><p>正在读取本机计划数据。</p></div>
+        </template>
+        <div v-else>
+          <span class="section-label">WEEKLY STORY ARC</span>
+          <h2>本周主线：还没有创建</h2>
+          <p>{{ positioningReady ? `本机还没有写入本周大纲，所以这里不显示主线 —— 系统不会自己编一条。下方「运营计划表」已保存，AI 生成内容会按它走（每天 ${postsPerDay} 条）。` : '本机还没有写入本周大纲，所以这里不显示主线 —— 先在下方填好「运营计划表」，再创建本周大纲。' }}</p>
+        </div>
       </div>
       <div class="story-map">
-        <button v-for="(item, index) in weeklyContents" :key="item.day" type="button" :class="['story-node', 'panel', { active: selectedOutlineDay === index, done: index < 2 }]" @click="selectedOutlineDay = index">
-          <span class="story-index">{{ item.day }}</span><div><small>{{ item.stage }}</small><b>{{ item.title }}</b><em>{{ index < 2 ? '已完成并沉淀数据' : index === 2 ? '今天重点执行' : '承接前一日结论' }}</em></div><CircleCheck v-if="index < 2" :size="18" /><ChevronRight v-else :size="18" />
+        <button v-for="(item, index) in weeklyContents" :key="item.day" type="button" :class="['story-node', 'panel', { active: selectedOutlineDay === index, done: item.rawStatus === 'published' }]" @click="selectedOutlineDay = index">
+          <span class="story-index">{{ item.day }}</span><div><small>{{ item.stage }}</small><b>{{ item.title }}</b><em>{{ nodeHint(item) }}</em></div><CircleCheck v-if="item.rawStatus === 'published'" :size="18" /><ChevronRight v-else :size="18" />
         </button>
       </div>
       <article class="continuity-card panel"><span class="continuity-icon"><BookOpenCheck :size="21" /></span><div><span class="section-label">连贯性检查</span><h3>D{{ selectedOutlineDay + 1 }} 如何承上启下</h3><p>{{ selectedOutlineDay === 0 ? '先说出新手真实痛点，为后续工具与方法建立学习动机。' : `承接 D${selectedOutlineDay} 的结论，加入新的证明或行动，并为 D${selectedOutlineDay + 2 > 7 ? 7 : selectedOutlineDay + 2} 留下明确的问题。` }}</p></div><span class="gate-pass"><Check :size="13" />逻辑通过</span></article>
@@ -1810,7 +1945,7 @@ onBeforeUnmount(() => {
           <article v-for="item in filteredLibrary" :key="item.id || item.title" class="library-row"><b>{{ item.title }}</b><span>{{ item.topic }}</span><span>{{ item.status }}</span><span class="pass-text"><LockKeyhole :size="13" />{{ item.similarity === null ? '—' : item.similarity + '%' }}</span><small>{{ item.date }}</small></article>
           <div v-if="!filteredLibrary.length" class="empty-library"><Search :size="22" /><b>{{ libraryRows.length ? '没有找到相关文案' : '文案库还是空的' }}</b><small>{{ libraryRows.length ? '换一个关键词试试。' : '点右上角「从我的小红书导入」，把你已经发过的笔记收进来。' }}</small></div>
         </div>
-        <aside class="gate-policy panel"><span class="policy-icon"><LockKeyhole :size="21" /></span><span class="section-label">原创度规则</span><h3>60% 硬门禁</h3><p>每次生成会比较标题、正文结构、核心观点和表达方式。</p><div class="threshold"><span>当前最高 {{ maxSimilarity === null ? '—' : maxSimilarity + '%' }}</span><b>门禁 60%</b><i><em /></i></div><ul><li><Check :size="13" />达到 60% 自动退回</li><li><Check :size="13" />最多自动重写 3 次</li><li><Check :size="13" />通过后才允许排期</li></ul></aside>
+        <aside class="gate-policy panel"><span class="policy-icon"><LockKeyhole :size="21" /></span><span class="section-label">原创度规则</span><h3>60% 硬门禁</h3><p>每次生成会比较标题、正文结构、核心观点和表达方式。</p><div class="threshold"><span>当前最高 {{ maxSimilarity === null ? '—' : maxSimilarity + '%' }}</span><b>门禁 60%</b><i><em :style="{ width: (maxSimilarity === null ? 0 : Math.min(100, maxSimilarity)) + '%' }" /></i></div><ul><li><Check :size="13" />达到 60% 自动退回</li><li><Check :size="13" />最多自动重写 3 次</li><li><Check :size="13" />通过后才允许排期</li></ul></aside>
       </div>
     </template>
 
@@ -1820,7 +1955,7 @@ onBeforeUnmount(() => {
         <article v-for="item in connectionList" :key="item.name" class="connection-card panel"><span :class="['connection-icon', item.icon]"><KeyRound v-if="item.icon === 'ai'" :size="19" /><Palette v-else-if="item.icon === 'img'" :size="19" /><Send v-else-if="item.icon === 'mcp'" :size="19" /><ShieldCheck v-else :size="19" /></span><div><small>{{ item.name }}</small><b>{{ item.detail }}</b></div><span class="connection-state"><i />{{ item.state }}</span></article>
       </div>
       <div class="settings-grid">
-        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">CONTENT SAFETY</span><h3>内容与发布保护</h3></div><ShieldCheck :size="19" /></div><div class="setting-rows"><div><span><b>发布前人工确认</b><small>每条内容必须点确认后才能进入队列</small></span><button type="button" aria-label="发布前人工确认" :aria-pressed="systemToggles.review" :class="['switch-control', { active: systemToggles.review }]" @click="toggleSetting('review')"><i /></button></div><div><span><b>相似度超限自动重写</b><small>达到 60% 时最多自动重写 3 次</small></span><button type="button" aria-label="相似度超限自动重写" :aria-pressed="systemToggles.rewrite" :class="['switch-control', { active: systemToggles.rewrite }]" @click="toggleSetting('rewrite')"><i /></button></div><div><span><b>允许无人值守发布</b><small>建议完成首篇引导后再开启</small></span><button type="button" aria-label="允许无人值守发布" :aria-pressed="systemToggles.publish" :class="['switch-control', { active: systemToggles.publish }]" @click="toggleSetting('publish')"><i /></button></div></div></article>
+        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">CONTENT SAFETY</span><h3>内容与发布保护</h3></div><ShieldCheck :size="19" /></div><div class="setting-rows"><div><span><b>发布前人工确认</b><small>每条内容必须点确认后才能进入队列</small></span><span class="not-wired">未接入</span></div><div><span><b>相似度超限自动重写</b><small>达到 60% 时最多自动重写 3 次</small></span><span class="not-wired">未接入</span></div><div><span><b>允许无人值守发布</b><small>建议完成首篇引导后再开启</small></span><span class="not-wired">未接入</span></div></div></article>
         <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>{{ envOsText }}</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</button></article>
       </div>
 

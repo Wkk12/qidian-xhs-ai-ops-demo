@@ -65,30 +65,75 @@ async function loadAccount() {
 onMounted(loadAccount)
 
 /* -------- 周计划 / 今日发布：真实数据 -------- */
+const weeklyPlan = ref(null)      // 最新一条运营计划 { theme, nodes:[...], status }
+const maxDupScore = ref(0)        // 文案库最高相似度（0~1 分数，0.42 = 42%）
+const maxDupPost = ref(null)      // 相似度最高的那条内容（抽屉默认预览对象）
+const bestTime = ref(null)        // 建议发布时间 { recommended, confidence, note }
+
+// 后端 /api/plans 返回的 nodes 是 JSON 字符串，需解析成数组
+function parsePlanNodes(raw) {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [] } catch { return [] } }
+  return []
+}
+// contents.images / contents.tags 都是 JSON 字符串
+function parseImages(raw) {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [] } catch { return [] } }
+  return []
+}
+function parseTags(raw) {
+  if (Array.isArray(raw)) return raw
+  if (typeof raw === 'string') { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [] } catch { return [] } }
+  return []
+}
+// 把 /api/contents 的一条原始记录映射成视图对象（排期行 / 抽屉预览共用同一映射，避免两处口径不一致）
+function toPostView(it, i) {
+  return {
+    id: it.id,
+    day: i === 0 ? '最近' : '',
+    time: '',
+    title: it.title || '(无标题)',
+    body: it.body || '',
+    tag: it.source === 'generated' ? 'AI 生成' : '历史笔记',
+    tags: parseTags(it.tags),
+    tone: ['rose', 'wine', 'cream', 'silver'][i % 4],
+    images: parseImages(it.images),
+    similarity: typeof it.dup_score === 'number' ? it.dup_score : null,
+  }
+}
+
 async function loadPlanAndPosts() {
   try {
     const pr = await api.plans()
-    const plan = (pr.items || [])[0]
-    if (plan && Array.isArray(plan.nodes) && plan.nodes.length) {
-      outlineDays.value = plan.nodes.map((n, i) => ({
+    const raw = (pr.items || [])[0]
+    if (raw) {
+      const nodes = parsePlanNodes(raw.nodes)
+      weeklyPlan.value = { theme: raw.theme || '', status: raw.status || '', nodes }
+      outlineDays.value = nodes.map((n, i) => ({
         day: n.day || ('D' + (i + 1)),
         title: n.title || n.承接 || '未命名',
         status: n.status || '待生成',
       }))
+    } else {
+      weeklyPlan.value = null
+      outlineDays.value = []
     }
-  } catch (e) { /* 保持空 */ }
+  } catch (e) { weeklyPlan.value = null; outlineDays.value = [] }
   try {
     const cr = await api.contents()
     const items = cr.items || []
-    posts.value = items.slice(0, 4).map((it, i) => ({
-      day: i === 0 ? '最近' : '',
-      time: '',
-      title: it.title || '(无标题)',
-      tag: it.source === 'generated' ? 'AI 生成' : '历史笔记',
-      tone: ['rose', 'wine', 'cream', 'silver'][i % 4],
-      similarity: typeof it.dup_score === 'number' ? it.dup_score : 0,
-    }))
-  } catch (e) { /* 保持空 */ }
+    const scored = items.filter((it) => typeof it.dup_score === 'number')
+    maxDupScore.value = scored.length ? Math.max(...scored.map((it) => it.dup_score)) : 0
+    posts.value = items.slice(0, 4).map(toPostView)
+    // 抽屉默认预览「相似度最高」的那条（查重的实际对象），而不是随便拿第一条
+    maxDupPost.value = scored.length
+      ? toPostView(scored.reduce((a, b) => (b.dup_score > a.dup_score ? b : a)), 0)
+      : null
+  } catch (e) { maxDupScore.value = 0; maxDupPost.value = null; posts.value = [] }
+  try {
+    bestTime.value = await api.bestTime()
+  } catch (e) { bestTime.value = null }
 }
 
 onMounted(loadPlanAndPosts)
@@ -283,25 +328,40 @@ onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange
 onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange))
 
 
-const metrics = computed(() => [
-  {
-    label: '粉丝', unit: '人', icon: TrendingUp,
-    value: accountInfo.value.loading ? '…' : String(accountInfo.value.fans ?? '—'),
-    delta: accountInfo.value.error
-      ? '读取失败'
-      : (accountInfo.value.nickname ? `账号 ${accountInfo.value.nickname}` : '真实数据'),
-  },
-  {
-    label: '关注', unit: '人', icon: CalendarDays,
-    value: accountInfo.value.loading ? '…' : String(accountInfo.value.follows ?? '—'),
-    delta: '真实数据',
-  },
-  {
-    label: '获赞与收藏', unit: '次', icon: LibraryBig,
-    value: accountInfo.value.loading ? '…' : String(accountInfo.value.likes ?? '—'),
-    delta: '真实数据',
-  },
-])
+// 账号 ID 脱敏：客户页不露明文 ID（长度 ≤8 原样；否则 前4****后4）
+function maskId(id) {
+  const s = String(id == null ? '' : id).trim()
+  if (s.length <= 8) return s
+  return `${s.slice(0, 4)}****${s.slice(-4)}`
+}
+
+// 指标卡右上角胶囊：只放接口能拿到的真实字段，不放「真实数据」这种自证文案
+function metricHint(loading, error, text) {
+  if (error) return '读取失败'
+  if (loading) return '读取中…'
+  return text || '—'
+}
+
+const metrics = computed(() => {
+  const a = accountInfo.value
+  return [
+    {
+      label: '粉丝', unit: '人', icon: TrendingUp,
+      value: a.loading ? '…' : String(a.fans ?? '—'),
+      delta: metricHint(a.loading, a.error, a.noteCount != null ? `${a.noteCount} 篇笔记` : ''),
+    },
+    {
+      label: '关注', unit: '人', icon: CalendarDays,
+      value: a.loading ? '…' : String(a.follows ?? '—'),
+      delta: metricHint(a.loading, a.error, a.redId ? `红书号 ${maskId(a.redId)}` : ''),
+    },
+    {
+      label: '获赞与收藏', unit: '次', icon: LibraryBig,
+      value: a.loading ? '…' : String(a.likes ?? '—'),
+      delta: metricHint(a.loading, a.error, '来源：创作者中心'),
+    },
+  ]
+})
 
 // 七天内容先共用一条叙事主线，再拆分为每天的内容任务。
 const outlineDays = ref([])
@@ -310,9 +370,90 @@ const outlineDays = ref([])
 const posts = ref([])
 
 const previewOpen = ref(false)
+const previewPost = ref(null) // 抽屉当前预览的内容对象（点击排期行/卡片时传入）
 const selectedDay = ref(2)
 const activeView = ref('dashboard')
 const currentView = computed(() => viewMeta[activeView.value])
+
+// 文案库真实最高相似度（量纲 0~1 → 百分比）；无数据时置 null 表示「未查重」
+const dedupeMaxPct = computed(() =>
+  maxDupScore.value > 0 ? Math.round(maxDupScore.value * 100) : null,
+)
+const dedupeAllPass = computed(() => maxDupScore.value < 0.6)
+// 门禁进度条宽度：按真实最高相似度（去掉 CSS 里写死的 42%）
+const dedupeBarWidth = computed(() => {
+  const p = dedupeMaxPct.value
+  if (p == null) return '0%'
+  return `${Math.min(Math.max(p, 0), 100)}%`
+})
+
+// 本周计划主题/主线（来自 /api/plans 的 theme 字段）；空则 null
+const planTheme = computed(() => (weeklyPlan.value && weeklyPlan.value.theme) || null)
+const planReady = computed(() => !!weeklyPlan.value && weeklyPlan.value.nodes.length > 0)
+
+// spotlight 大卡「第 3 天」标题：读大纲第 3 个节点（无则退回主题）
+const spotlightTitle = computed(() => {
+  const d = outlineDays.value[2]
+  return (d && d.title && d.title !== '未命名') ? d.title : (planTheme.value || '')
+})
+const spotlightDesc = computed(() => {
+  if (!planReady.value) return ''
+  const d = outlineDays.value[2]
+  return d ? `${d.title} · ${d.status}；整周主线：${planTheme.value || '未设定'}` : ''
+})
+
+// 内容状态 → 流程节点样式：只有 published 算已完成（approved 未真发布，不算完成），其余第一个未完成的算「当前」
+const DONE_STATUS = ['published']
+// 抽屉大纲：按真实 status 算进度与节点态，不再写死「3 / 7」和 index<2 的假进度
+const outlineFlow = computed(() => {
+  const items = outlineDays.value.map((d) => ({ ...d, done: DONE_STATUS.includes(d.status) }))
+  const firstOpen = items.findIndex((d) => !d.done)
+  return items.map((d, i) => ({ ...d, cls: d.done ? 'done' : (i === firstOpen ? 'current' : '') }))
+})
+// 无计划时返回 null，由模板走空态，不再兜底成「0 / 7」这种像有数据的假值
+const outlineProgress = computed(() => {
+  const list = outlineFlow.value
+  if (!list.length) return null
+  return `${list.filter((d) => d.done).length} / ${list.length}`
+})
+
+// 建议发布时间（best-time 接口返回 recommended + confidence；冷启动标「仅供参考」）
+const bestTimeLabel = computed(() => {
+  const b = bestTime.value
+  if (!b || !b.recommended) return '待定'
+  return b.confidence === 'own-data' ? `建议 ${b.recommended}` : `建议 ${b.recommended}（仅供参考）`
+})
+
+// 打开质量检查抽屉：按点击目标传对应内容，不再一套假数据打天下
+function openPreview(post = null) {
+  previewPost.value = post
+  previewOpen.value = true
+}
+
+// 抽屉手机预览区取哪条内容：优先点中的那行，否则取排期列表第一条
+const phonePreview = computed(() => previewPost.value || posts.value[0] || null)
+const phoneCoverTitle = computed(() => (phonePreview.value ? phonePreview.value.title : ''))
+const phoneCoverSub = computed(() => (phonePreview.value ? phonePreview.value.tag : ''))
+const phoneBodyLead = computed(() => {
+  if (!phonePreview.value || !phonePreview.value.body) return ''
+  return phonePreview.value.body.split('\n').find((l) => l.trim()) || ''
+})
+// 正文去掉首行后的摘要（原来这里是写死的第二段文案）
+const phoneBodyRest = computed(() => {
+  if (!phonePreview.value || !phonePreview.value.body) return ''
+  return phonePreview.value.body
+    .split('\n').map((l) => l.trim()).filter(Boolean).slice(1).join(' ')
+})
+// 真实话题标签（contents.tags，JSON 字符串）
+const phoneTagsText = computed(() => {
+  const t = phonePreview.value ? phonePreview.value.tags : null
+  return Array.isArray(t) && t.length ? t.join(' ') : ''
+})
+const phoneImageCount = computed(() => (phonePreview.value ? phonePreview.value.images.length : 0))
+const phoneSimilarity = computed(() => {
+  const s = phonePreview.value ? phonePreview.value.similarity : null
+  return typeof s === 'number' ? Math.round(s * 100) : null
+})
 </script>
 
 <template>
@@ -371,7 +512,7 @@ const currentView = computed(() => viewMeta[activeView.value])
               <Bell :size="18" />
               <span class="alert-dot" />
             </button>
-            <button class="primary-button glass-button" type="button" aria-label="生成 7 天内容" @click="previewOpen = true">
+            <button class="primary-button glass-button" type="button" aria-label="生成 7 天内容" @click="openPreview(maxDupPost)">
               <Sparkles :size="17" />
               <span>生成 7 天内容</span>
               <ArrowUpRight :size="16" />
@@ -396,12 +537,14 @@ const currentView = computed(() => viewMeta[activeView.value])
           <div v-if="activeView === 'dashboard'" key="dashboard" class="dashboard-grid">
             <article class="spotlight panel">
               <div class="spotlight-copy">
-                <span class="section-label">本周内容主线 · 第 3 天</span>
-                <h2>从“会化妆”到<br><em>会表达自己</em></h2>
-                <p>前两天建立痛点和工具认知，今天进入核心手法；后续自然衔接穿搭、案例和课程转化。</p>
-                <button type="button" class="text-action" @click="previewOpen = true">
+                <span class="section-label">{{ planReady ? '本周内容主线 · 第 3 天' : '本周内容主线' }}</span>
+                <h2 v-if="planReady">{{ spotlightTitle }}</h2>
+                <h2 v-else>还没有运营计划</h2>
+                <p v-if="planReady">{{ spotlightDesc }}</p>
+                <p v-else>先去「运营大纲」定下这一周的内容主线，再回来批量生成每一天的文案。</p>
+                <button type="button" class="text-action" @click="activeView = 'outline'">
                   <Play :size="15" fill="currentColor" />
-                  查看内容方案
+                  {{ planReady ? '查看内容方案' : '去创建运营计划' }}
                 </button>
               </div>
 
@@ -425,7 +568,8 @@ const currentView = computed(() => viewMeta[activeView.value])
                 </svg>
                 <div class="visual-caption">
                   <span>本周统一内容母题</span>
-                  <b>找到适合自己的风格，而不是照搬模板</b>
+                  <b v-if="planTheme">{{ planTheme }}</b>
+                  <b v-else>还没有设定 · 去运营大纲创建</b>
                 </div>
               </div>
             </article>
@@ -447,7 +591,7 @@ const currentView = computed(() => viewMeta[activeView.value])
                 <button type="button" class="round-link" aria-label="查看全部排期"><ChevronRight :size="18" /></button>
               </div>
               <div class="post-list">
-                <button v-for="post in posts" :key="post.day" type="button" class="post-row" @click="previewOpen = true">
+                <button v-for="post in posts" :key="post.id" type="button" class="post-row" @click="openPreview(post)">
                   <span class="post-date"><b>{{ post.day }}</b><small>{{ post.time }}</small></span>
                   <span :class="['cover-art', `tone-${post.tone}`]">
                     <svg viewBox="0 0 60 60" aria-hidden="true">
@@ -456,7 +600,7 @@ const currentView = computed(() => viewMeta[activeView.value])
                     </svg>
                   </span>
                   <span class="post-copy"><b>{{ post.title }}</b><small># {{ post.tag }}</small></span>
-                  <span class="post-state originality-pass"><LockKeyhole :size="14" /> 相似 {{ post.similarity }}%</span>
+                  <span class="post-state originality-pass"><LockKeyhole :size="14" /> <template v-if="post.similarity != null">相似 {{ Math.round(post.similarity * 100) }}%</template><template v-else>未查重</template></span>
                   <ChevronRight class="post-arrow" :size="17" />
                 </button>
               </div>
@@ -492,8 +636,14 @@ const currentView = computed(() => viewMeta[activeView.value])
             <article class="ai-card panel">
               <div class="ai-head">
                 <span class="ai-orb"><Sparkles :size="20" /></span>
-                <div><small>文案库原创守门</small><h3>全部低于 60% 门禁</h3></div>
-                <span class="complete"><Check :size="13" /> 已通过</span>
+                <div>
+                  <small>文案库原创守门</small>
+                  <h3 v-if="dedupeMaxPct != null">{{ dedupeAllPass ? '全部低于 60% 门禁' : '存在超过 60% 门禁的文案' }}</h3>
+                  <h3 v-else>还没有可查重的文案</h3>
+                </div>
+                <span v-if="dedupeMaxPct == null" class="gate-warn"><LockKeyhole :size="13" /> 待查重</span>
+                <span v-else-if="dedupeAllPass" class="complete"><Check :size="13" /> 已通过</span>
+                <span v-else class="gate-warn"><LockKeyhole :size="13" /> 需处理</span>
               </div>
               <p>标题、正文结构、核心观点和表达方式都会与文案库全部历史文案逐一比对；达到 60% 时自动退回重写。</p>
               <div class="ai-steps">
@@ -501,12 +651,12 @@ const currentView = computed(() => viewMeta[activeView.value])
                 <i />
                 <span><Check :size="13" /> 语义查重</span>
                 <i />
-                <span><LockKeyhole :size="13" /> 低于 60%</span>
+                <span><LockKeyhole :size="13" /> 当前最高 {{ dedupeMaxPct == null ? '—' : dedupeMaxPct + '%' }}</span>
               </div>
-              <button type="button" class="ai-action" @click="previewOpen = true">查看查重与大纲 <ArrowUpRight :size="15" /></button>
+              <button type="button" class="ai-action" @click="openPreview(maxDupPost)">查看查重与大纲 <ArrowUpRight :size="15" /></button>
             </article>
           </div>
-          <ModuleViews v-else :active-view="activeView" @open-preview="previewOpen = true" />
+          <ModuleViews v-else :active-view="activeView" @open-preview="openPreview()" />
         </Transition>
       </div>
     </section>
@@ -521,23 +671,33 @@ const currentView = computed(() => viewMeta[activeView.value])
           <section class="quality-gate">
             <div class="gate-head">
               <span class="gate-icon"><LockKeyhole :size="18" /></span>
-              <div><small>原创度门禁</small><b>最高相似度 42%</b></div>
-              <span class="gate-pass"><Check :size="13" /> 通过</span>
+              <div>
+                <small>原创度门禁</small>
+                <b>{{ dedupeMaxPct == null ? '还没有可查重的文案' : `最高相似度 ${dedupeMaxPct}%` }}</b>
+              </div>
+              <span v-if="dedupeMaxPct == null" class="gate-warn"><LockKeyhole :size="13" /> 待查重</span>
+              <span v-else-if="dedupeAllPass" class="gate-pass"><Check :size="13" /> 通过</span>
+              <span v-else class="gate-warn"><LockKeyhole :size="13" /> 超阈值</span>
             </div>
-            <div class="gate-bar"><i /></div>
+            <div class="gate-bar"><i :style="{ width: dedupeBarWidth }" /></div>
             <p>阈值为 60%。若标题、结构或核心表达达到阈值，系统会自动重写并再次检测。</p>
           </section>
           <section class="drawer-outline">
-            <div class="drawer-title"><span>7 天内容大纲</span><small>3 / 7 推进中</small></div>
-            <div class="outline-flow">
+            <div class="drawer-title">
+              <span>{{ outlineFlow.length ? `${outlineFlow.length} 天内容大纲` : '内容大纲' }}</span>
+              <small v-if="outlineProgress">{{ outlineProgress }} 推进中</small>
+              <small v-else>还没有大纲</small>
+            </div>
+            <div v-if="outlineFlow.length" class="outline-flow">
               <span
-                v-for="(item, index) in outlineDays"
-                :key="item.day"
-                :class="{ done: index < 2, current: index === 2 }"
+                v-for="(item, index) in outlineFlow"
+                :key="item.day + '-' + index"
+                :class="item.cls"
               >
                 <i>{{ index + 1 }}</i><small>{{ item.title }}</small>
               </span>
             </div>
+            <p v-else>还没有内容大纲。去「运营大纲」创建本周计划后，这里会显示每天的主题与推进状态。</p>
           </section>
           <div class="phone-preview">
             <div class="phone-cover">
@@ -546,17 +706,20 @@ const currentView = computed(() => viewMeta[activeView.value])
                 <path d="M89 86c19-37 83-45 99 5 11 36-11 87-49 104-30-14-51-62-50-109Z" />
                 <path d="M115 92c12-6 26-5 38 2M123 112c8 5 17 5 25-1M137 126c0 8 3 14 8 17" />
               </svg>
-              <span>新手化妆<br><b>第一支刷子怎么选？</b></span>
+              <span v-if="phonePreview">{{ phoneCoverSub }}<br><b>{{ phoneCoverTitle }}</b></span>
+              <span v-else>暂无可预览内容</span>
             </div>
             <div class="phone-copy">
-              <b>别急着买一整套，零基础先认准这 3 支。</b>
-              <p>底妆刷、眼影铺色刷和晕染刷，已经足够完成一套干净的日常妆。</p>
-              <small>#化妆培训 #新手化妆 #美妆干货</small>
+              <b>{{ phoneBodyLead || '该条内容暂无正文' }}</b>
+              <p v-if="phoneBodyRest">{{ phoneBodyRest }}</p>
+              <small v-if="phoneTagsText">{{ phoneTagsText }}</small>
+              <small v-else>{{ phonePreview ? `# ${phonePreview.tag}` : '' }}</small>
             </div>
           </div>
           <div class="preview-meta">
-            <span><Clock3 :size="15" /> 今天 19:30</span>
-            <span><Image :size="15" /> 6 张配图</span>
+            <span><Clock3 :size="15" /> {{ bestTimeLabel }}</span>
+            <span v-if="phonePreview"><Image :size="15" /> {{ phoneImageCount }} 张配图</span>
+            <span v-else><Image :size="15" /> 暂无配图数据</span>
           </div>
           <ElButton class="preview-cta" type="primary" round @click="previewOpen = false">确认大纲与原创度</ElButton>
         </aside>
@@ -601,9 +764,5 @@ const currentView = computed(() => viewMeta[activeView.value])
       </div>
     </Transition>
 
-    <div class="theme-caption" aria-live="polite">
-      <span><LockKeyhole :size="14" /></span>
-      <div><b>原创度门禁已开启</b><small>相似度必须低于 60%</small></div>
-    </div>
   </main>
 </template>
