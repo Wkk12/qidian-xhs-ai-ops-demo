@@ -9,3 +9,11 @@ server/.env
 
 # 数据与素材
 server/data/
+
+# 备份快照与临时产物（不入库）
+.backup*/
+.qa-screens/
+_int_contents.json
+/*.png
+/*.jpg
+/*.jpeg
