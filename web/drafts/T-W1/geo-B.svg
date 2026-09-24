@@ -1,0 +1,36 @@
+<!-- T-W1 草稿 B ·「拱与三角」几何静物（Bauhaus Still-life）
+     用途：替换「今日运营」spotlight 区块中间的面部线稿图（beauty-visual）
+     规格：viewBox 0 0 420 380（与旧图一致，可直接换装）；颜色全走主题变量，随三套主题自适应
+     设计语言：包豪斯静物构图 —— 圆拱门 + 三角山形 + 拱顶渐变圆 + 一条基线，几何、克制、展陈感
+     版式注意：母题玻璃卡片压在框底 15~72px（viewBox y≈295 以下），故基线放在 y=270 -->
+<svg class="geo-art" viewBox="0 0 420 380" role="img" aria-label="本周内容母题视觉图 · 几何静物">
+  <defs>
+    <linearGradient id="geoB-skin" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--visual-soft, #f0c9c0)" />
+      <stop offset="1" stop-color="var(--visual-deep, #c87f82)" />
+    </linearGradient>
+    <filter id="geoB-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26" />
+    </filter>
+    <style>
+      .geoB-halo { fill: var(--visual-halo, rgba(255,239,229,.85)); }
+      .geoB-line { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      .geoB-rule { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 1.2; opacity: .3; }
+      .geoB-disc { fill: url(#geoB-skin); }
+      .geoB-dot { fill: var(--accent, #a4294b); }
+    </style>
+  </defs>
+
+  <!-- 柔光底 -->
+  <circle class="geoB-halo" cx="212" cy="150" r="124" filter="url(#geoB-blur)" />
+  <!-- 圆拱门 -->
+  <path class="geoB-line" d="M116 270V170a60 60 0 0 1 120 0v100" />
+  <!-- 三角山形 -->
+  <path class="geoB-line" d="M252 270l56-92 56 92Z" />
+  <!-- 拱顶渐变圆 -->
+  <circle class="geoB-disc" cx="176" cy="110" r="27" />
+  <!-- 山尖强调点 -->
+  <circle class="geoB-dot" cx="308" cy="178" r="5.5" />
+  <!-- 基线 -->
+  <path class="geoB-rule" d="M64 270H364" />
+</svg>

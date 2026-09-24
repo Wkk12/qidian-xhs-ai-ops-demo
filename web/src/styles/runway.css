@@ -26,7 +26,7 @@
 .theme-runway .account-mini { border: 0; }
 .theme-runway .workspace { padding-top: 22px; }
 .theme-runway .topbar h1 { font-family: "Songti SC", serif; font-weight: 500; }
-.theme-runway .dashboard-grid { grid-template-columns: minmax(0, 1.32fr) minmax(260px, .72fr) minmax(270px, .8fr); grid-template-areas: "spot spot metrics" "trend schedule ai"; }
+.theme-runway .dashboard-grid { grid-template-columns: minmax(0, 1.32fr) minmax(260px, .72fr) minmax(270px, .8fr); grid-template-areas: "spot spot metrics" "trend schedule ai" "feed feed feed"; }
 .theme-runway .spotlight { grid-area: spot; min-height: 288px; display: grid; grid-template-columns: minmax(0, .9fr) minmax(300px, 1.1fr); }
 .theme-runway .spotlight-copy { padding: 28px 31px; }
 .theme-runway .beauty-visual { order: -1; }
@@ -44,9 +44,9 @@
 .theme-runway .chart-wrap svg { height: 205px; }
 
 @media (max-width: 1320px) {
-  .theme-runway .dashboard-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "spot spot" "metrics metrics" "trend schedule" "ai ai"; }
+  .theme-runway .dashboard-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "spot spot" "metrics metrics" "trend schedule" "ai ai" "feed feed"; }
   .theme-runway .metric-zone { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1080px) { .theme-runway .main-nav .nav-item span { display: none; }.theme-runway .sidebar { grid-template-columns: 180px 1fr 190px; } }
 @media (max-width: 900px) { .theme-runway .sidebar { display: none; } }
-@media (max-width: 640px) { .theme-runway .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai"; }.theme-runway .spotlight { grid-template-columns: 1fr; }.theme-runway .beauty-visual { order: 0; } }
+@media (max-width: 640px) { .theme-runway .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai" "feed"; }.theme-runway .spotlight { grid-template-columns: 1fr; }.theme-runway .beauty-visual { order: 0; } }

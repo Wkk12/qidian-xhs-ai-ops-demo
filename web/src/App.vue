@@ -136,6 +136,37 @@ async function loadPlanAndPosts() {
   } catch (e) { bestTime.value = null }
 }
 
+/* -------- 互动运营（R18）：我们回复了谁 / 用户留言了什么（契约1 GET /api/interaction/feed） -------- */
+const feedReplies = ref([])   // 已回复记录：{ user, comment, reply, mode, at, note }
+const feedIncoming = ref([])  // 用户留言：{ user, text, at, note }
+const feedLoading = ref(true)
+const feedError = ref('')
+async function loadInteractionFeed() {
+  feedLoading.value = true
+  try {
+    const r = await api.interactionFeed(40)
+    feedReplies.value = Array.isArray(r.replies) ? r.replies : []
+    feedIncoming.value = Array.isArray(r.incoming) ? r.incoming : []
+    feedError.value = ''
+  } catch (e) {
+    // 契约1 未就绪（404）先静默走空态：不假装有数据，也不弹假错误
+    feedError.value = e.status === 404 ? '' : (e.message || '读取互动记录失败')
+    feedReplies.value = []
+    feedIncoming.value = []
+  } finally {
+    feedLoading.value = false
+  }
+}
+// 互动时间显示：ISO → MM-DD HH:mm（解析不了就截前 16 字符，不编造）
+function formatFeedTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+onMounted(loadInteractionFeed)
+
 onMounted(loadPlanAndPosts)
 
 /* -------- 内容热度趋势：真数据（小红书创作者中心 · 自己内容的每日浏览量） -------- */
@@ -291,7 +322,7 @@ async function openLogin() {
       qrSecondsLeft.value = 0
       qrImage.value = ''
       justLoggedIn.value = true
-      await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries()])
+      await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries(), loadInteractionFeed()])
       return
     }
     // 服务正常（只是没扫码）→ 保持 4 秒；服务异常 → 退避
@@ -603,6 +634,51 @@ const phoneSimilarity = computed(() => {
                   <span class="post-state originality-pass"><LockKeyhole :size="14" /> <template v-if="post.similarity != null">相似 {{ Math.round(post.similarity * 100) }}%</template><template v-else>未查重</template></span>
                   <ChevronRight class="post-arrow" :size="17" />
                 </button>
+              </div>
+            </article>
+
+            <article class="feed panel">
+              <div class="panel-head">
+                <div><span class="section-label">INTERACTION</span><h3>互动运营</h3></div>
+                <span v-if="feedReplies.length || feedIncoming.length" class="feed-count">
+                  已回复 {{ feedReplies.length }} · 留言 {{ feedIncoming.length }}
+                </span>
+              </div>
+              <div class="feed-grid">
+                <section class="feed-col">
+                  <h4>我们回复了谁</h4>
+                  <p v-if="feedLoading" class="feed-empty">正在读取互动记录…</p>
+                  <p v-else-if="feedError" class="feed-empty">{{ feedError }}</p>
+                  <p v-else-if="!feedReplies.length" class="feed-empty">还没有互动 · 有回复记录后在这里显示</p>
+                  <ul v-else class="feed-list">
+                    <li v-for="(r, i) in feedReplies" :key="'r' + (r.id != null ? r.id : i)">
+                      <div class="feed-line">
+                        <b>{{ r.user || '匿名用户' }}</b>
+                        <span class="feed-tag">{{ r.mode === 'auto' ? '自动回复' : '人工回复' }}</span>
+                        <time>{{ formatFeedTime(r.at) }}</time>
+                      </div>
+                      <p class="feed-quote">{{ r.comment }}</p>
+                      <p v-if="r.reply" class="feed-reply">我们：{{ r.reply }}</p>
+                      <small v-if="r.note">来自笔记《{{ r.note }}》</small>
+                    </li>
+                  </ul>
+                </section>
+                <section class="feed-col">
+                  <h4>用户留言</h4>
+                  <p v-if="feedLoading" class="feed-empty">正在读取留言…</p>
+                  <p v-else-if="feedError" class="feed-empty">{{ feedError }}</p>
+                  <p v-else-if="!feedIncoming.length" class="feed-empty">还没有互动 · 有新留言后在这里显示</p>
+                  <ul v-else class="feed-list">
+                    <li v-for="(m, i) in feedIncoming" :key="'m' + i">
+                      <div class="feed-line">
+                        <b>{{ m.user || '匿名用户' }}</b>
+                        <time>{{ formatFeedTime(m.at) }}</time>
+                      </div>
+                      <p class="feed-quote">{{ m.text }}</p>
+                      <small v-if="m.note">来自笔记《{{ m.note }}》</small>
+                    </li>
+                  </ul>
+                </section>
               </div>
             </article>
 

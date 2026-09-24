@@ -31,6 +31,7 @@ function migrate(d) {
   add('comments', 'note_title', 'TEXT');
   add('comments', 'user_id', 'TEXT');
   add('comments', 'skip_reason', 'TEXT');
+  add('comments', 'replied_at', 'TEXT');
 }
 migrate(db);
 
@@ -84,6 +85,7 @@ CREATE TABLE IF NOT EXISTS contents (
   dup_with    INTEGER,        -- 与哪篇相似
   plan_id     INTEGER,
   day_index   INTEGER,        -- 周计划里第几天
+  favorite    INTEGER DEFAULT 0, -- 收藏（书签）：收藏后不参与 7 天自动清理
   created_at  TEXT,
   updated_at  TEXT
 );
@@ -124,10 +126,11 @@ CREATE TABLE IF NOT EXISTS publish_tasks (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   content_id  INTEGER,
   scheduled_at TEXT,
-  status      TEXT,           -- pending | publishing | done | failed | canceled
+  status      TEXT,           -- pending | awaiting_confirm | precheck | publishing | done | failed | canceled
   retry       INTEGER DEFAULT 0,
   note_id     TEXT,           -- 平台返回的笔记ID
   error       TEXT,
+  actual_sent_at TEXT,        -- 真实发送时间（R20：发布成功时落库；老任务为空）
   created_at  TEXT,
   updated_at  TEXT
 );
@@ -187,6 +190,7 @@ CREATE TABLE IF NOT EXISTS comments (
   note_title  TEXT,
   user_id     TEXT,
   skip_reason TEXT,
+  replied_at  TEXT,           -- 真实回复时间（老数据为空 → 用 created_at 兜底）
   created_at  TEXT
 );
 
@@ -232,6 +236,8 @@ CREATE INDEX IF NOT EXISTS idx_metrics_note ON metrics(note_id, date);
 for (const sql of [
   'ALTER TABLE contents ADD COLUMN note_id TEXT',      // 导入小红书历史笔记时记录笔记ID
   'ALTER TABLE contents ADD COLUMN source_url TEXT',   // 原帖链接
+  'ALTER TABLE contents ADD COLUMN favorite INTEGER DEFAULT 0',        // R19：收藏（书签）→ 豁免 7 天自动清理
+  'ALTER TABLE publish_tasks ADD COLUMN actual_sent_at TEXT',          // R20：真实发送时间
 ]) {
   try { db.exec(sql); } catch { /* 列已存在 */ }
 }

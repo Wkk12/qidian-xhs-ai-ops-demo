@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { db, now, log } from './db.js';
 import { mcp, extractMetrics, circuitState } from './mcp.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
-import { generateWeek, getPositioning, getGoodPosts, getTrends } from './generate.js';
+import { registerInteractionApi } from './interaction.js';
+import { registerAnalyticsApi } from './analytics.js';
+import { generateWeek, runGeneration, getPositioning, getGoodPosts, getTrends } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
 import { collectSnapshots, buildReport } from './report.js';
 import { generateImage, expandPrompt, imagegenReady, TIERS } from './imagegen.js';
@@ -22,7 +24,7 @@ import {
   takeover, resumeAuto, listTakeover, matchKnowledge,
 } from './comments.js';
 import { discover, analyzeAuthor, analyzeAll, listCompetitors, addCompetitor, removeCompetitor, enrich, enrichTimes } from './competitors.js';
-import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick, schedulerState, setSchedulerEnabled } from './publish.js';
+import { listTasks, schedulePublish, cancelTask, runTask, precheck, bestPublishTime, startScheduler, tick, schedulerState, confirmTask, scheduleBatch, publishSettings, setPublishSettings } from './publish.js';
 import { deepseekReady, deepseekInfo } from './deepseek.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +39,8 @@ await app.register(multipart, { limits: { fileSize: 30 * 1024 * 1024 } });
 // 素材文件静态服务：/files/xxx.png
 await app.register(fastifyStatic, { root: UPLOAD_DIR, prefix: '/files/' });
 await registerAssets(app);
+await registerInteractionApi(app);
+await registerAnalyticsApi(app);
 
 // 前端页面托管（构建产物 web/dist）→ 访问 http://127.0.0.1:8787 直接出页面，无需单独起前端
 const WEB_DIST = path.resolve(__dirname, '../../web/dist');
@@ -480,7 +484,11 @@ app.post('/api/competitors/enrich', async (req) => {
 });
 
 // ---------- 发布（M1：状态机 + 定时 + 预检 + 建议时间） ----------
-app.get('/api/publish/tasks', async () => ({ ok: true, items: listTasks() }));
+// tasks 列表：带内容快照（title/body/images/tags）供展开 + 手机预览；支持 ?from&to（YYYY-MM-DD）
+app.get('/api/publish/tasks', async (req) => {
+  const q = req.query || {};
+  return { ok: true, items: listTasks({ from: q.from || null, to: q.to || null, limit: Number(q.limit) || 200 }) };
+});
 
 app.get('/api/publish/best-time', async () => bestPublishTime());
 
@@ -499,11 +507,14 @@ app.post('/api/publish/schedule', async (req) => {
 
 app.post('/api/publish/tasks/:id/cancel', async (req) => cancelTask(Number(req.params.id)));
 
+// 人工确认发布（R20）：自动发送关闭时，到点任务转「待确认」，由此确认后发送
+app.post('/api/publish/tasks/:id/confirm', async (req) => confirmTask(Number(req.params.id)));
+
 // ⚠️ 真实发布（会发到账号上）—— 必须显式调用
 app.post('/api/publish/tasks/:id/run', async (req) => {
   const id = Number(req.params.id);
   log('warn', 'publish', `收到真实发布请求 #${id}`);
-  return runTask(id, { skipPrecheck: !!(req.body || {}).skipPrecheck });
+  return runTask(id, { skipPrecheck: (req.body || {}).skipPrecheck === true });
 });
 
 // 立即发布（未排期时：建任务 + 马上跑）
@@ -518,13 +529,26 @@ app.post('/api/publish/now', async (req) => {
 // 手动触发一次调度（排障用）
 app.post('/api/publish/tick', async () => { await tick(); return { ok: true, tasks: listTasks() }; });
 
-// 自动发布调度：真实开关（开关存本机 settings 表，刷新/重启后仍生效）
-// 2026-09-23 加：前端原来写死「已开启」，服务端也无开关 → 现在双向真。
+// 自动发送 / 发布保护（R20 真开关：存本机 settings 表，刷新/重启后仍生效）
+app.get('/api/publish/settings', async () => ({ ok: true, ...publishSettings() }));
+
+app.post('/api/publish/settings', async (req) => {
+  const b = req.body || {};
+  const asBool = (v) => v === true || v === 1 || v === '1' || v === 'true';
+  const patch = {};
+  if (b.autoSend !== undefined) patch.autoSend = asBool(b.autoSend);
+  if (b.protect !== undefined) patch.protect = asBool(b.protect);
+  return { ok: true, ...setPublishSettings(patch) };
+});
+
+// 兼容旧前端：enabled ⇔ 自动发送（R20 起旧「暂停调度」语义由「自动发送」承接）
 app.get('/api/publish/scheduler', async () => ({ ok: true, ...schedulerState() }));
 
 app.post('/api/publish/scheduler', async (req) => {
-  const enabled = !!(req.body || {}).enabled;
-  setSchedulerEnabled(enabled);
+  const b = req.body || {};
+  const asBool = (v) => v === true || v === 1 || v === '1' || v === 'true';
+  if (b.autoSend !== undefined) setPublishSettings({ autoSend: asBool(b.autoSend) });
+  else if (b.enabled !== undefined) setPublishSettings({ autoSend: asBool(b.enabled) });
   return { ok: true, ...schedulerState() };
 });
 
@@ -568,19 +592,31 @@ app.post('/api/duplicate/scan', async () => {
 // ---------- AI 能力（DeepSeek） ----------
 app.get('/api/ai/status', async () => ({ ok: true, deepseek: deepseekInfo() }));
 
-// 生成内容（7 天窗口）。dryRun=true 只预览不落库
+// 生成内容（R19 统一入口）。mode=auto|seven|single（auto：无生成内容→7 天，有→1 篇）；
+// 缺省 mode 时兼容旧参数 days/startDay。withImages=true → 生成后逐篇自动配图；
+// schedule={startDate,time} → 生成后按天直接排期（时间已过会拒绝）。dryRun=true 只预览不落库。
 app.post('/api/generate', async (req) => {
   const b = req.body || {};
   if (!deepseekReady()) {
     throw Object.assign(new Error('未配置 DeepSeek API Key（server/.env 的 DEEPSEEK_API_KEY）'), { status: 400 });
   }
-  return generateWeek({
+  const gen = await runGeneration({
     userIntent: b.userIntent || '',
     postsPerDay: Math.min(Math.max(Number(b.postsPerDay) || 1, 1), 9),
-    days: Math.min(Math.max(Number(b.days) || 7, 1), 14),
-    startDay: Math.min(Math.max(Number(b.startDay) || 1, 1), 7),
+    mode: ['auto', 'seven', 'single'].includes(b.mode) ? b.mode : '',
+    days: Number(b.days) || 0,
+    startDay: Number(b.startDay) || 0,
     dryRun: !!b.dryRun,
+    withImages: !!b.withImages,
+    imageTier: b.imageTier === 'fine' ? 'fine' : 'standard',
+    imageRatio: b.imageRatio || '1:1',
+    imageLimit: Number(b.imageLimit) || 0,
   });
+  if (!b.dryRun && b.schedule && Array.isArray(gen.items) && gen.items.length) {
+    gen.scheduled = scheduleBatch(gen.items, { startDate: b.schedule.startDate, time: b.schedule.time });
+    gen.scheduledOk = gen.scheduled.filter((x) => x.ok).length;
+  }
+  return gen;
 });
 
 // 生成前的参考系预览（让用户看到这次用了哪些参考）
@@ -804,6 +840,8 @@ app.patch('/api/contents/:id', async (req) => {
   for (const k of ['dup_score', 'dup_with', 'day_index']) {
     if (c[k] !== undefined) { sets.push(`${k}=?`); vals.push(c[k]); }
   }
+  // 收藏（R19）：收藏后不参与 7 天自动清理（白名单显式支持，勿并入上面的循环）
+  if (c.favorite !== undefined) { sets.push('favorite=?'); vals.push(c.favorite ? 1 : 0); }
   if (!sets.length) return { ok: true, noop: true };
   sets.push('updated_at=?'); vals.push(now(), id);
   db.prepare(`UPDATE contents SET ${sets.join(',')} WHERE id=?`).run(...vals);

@@ -1,0 +1,36 @@
+<!-- T-W1 草稿 A ·「晨环」极简光环（Eclipse Ring）
+     用途：替换「今日运营」spotlight 区块中间的面部线稿图（beauty-visual）
+     规格：viewBox 0 0 420 380（与旧图一致，可直接换装）；颜色全走主题变量，随三套主题自适应
+     设计语言：大留白 + 细线正圆 + 一段加粗强调弧 + 实心圆盘 + 一条基线，时尚编辑感
+     版式注意：母题玻璃卡片压在框底 15~72px（viewBox y≈295 以下），故落点线放在 y=268 -->
+<svg class="geo-art" viewBox="0 0 420 380" role="img" aria-label="本周内容母题视觉图 · 极简光环">
+  <defs>
+    <linearGradient id="geoA-skin" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--visual-soft, #f0c9c0)" />
+      <stop offset="1" stop-color="var(--visual-deep, #c87f82)" />
+    </linearGradient>
+    <filter id="geoA-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26" />
+    </filter>
+    <style>
+      .geoA-halo { fill: var(--visual-halo, rgba(255,239,229,.85)); }
+      .geoA-ring { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 2; }
+      .geoA-arc { fill: none; stroke: var(--accent, #a4294b); stroke-width: 6; stroke-linecap: round; }
+      .geoA-rule { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 1.2; opacity: .3; }
+      .geoA-disc { fill: var(--accent, #a4294b); }
+      .geoA-dot { fill: var(--accent-two, #d99389); }
+    </style>
+  </defs>
+
+  <!-- 柔光底 -->
+  <circle class="geoA-halo" cx="212" cy="146" r="130" filter="url(#geoA-blur)" />
+  <!-- 主环：细线正圆 -->
+  <circle class="geoA-ring" cx="212" cy="146" r="106" />
+  <!-- 强调弧：右上四分之一，加粗上色 -->
+  <path class="geoA-arc" d="M212 40A106 106 0 0 1 318 146" />
+  <!-- 落在弧端的实心圆盘 -->
+  <circle class="geoA-disc" cx="318" cy="146" r="13" />
+  <!-- 落点基线与端点 -->
+  <path class="geoA-rule" d="M64 268H360" />
+  <circle class="geoA-dot" cx="64" cy="268" r="5" />
+</svg>

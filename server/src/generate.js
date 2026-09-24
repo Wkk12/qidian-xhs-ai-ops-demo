@@ -8,10 +8,14 @@
  *   ④ 行业热榜     0.10
  *
  * 七天叙事结构（D1 痛点 → D7 转化），每天承接前一天结论。
+ *
+ * R19 增补（内容工坊）：统一生成入口 runGeneration（auto=无内容 7 天/有内容 1 篇）、
+ *   生成后逐篇自动配图（autoIllustrate，复用 imagegen 链路）、7 天未排期草稿自动清理（purgeExpiredDrafts）。
  */
 import { chat, parseJson } from './deepseek.js';
 import { db, now, log } from './db.js';
 import { checkDuplicate, similarity } from './dedupe.js';
+import { generateImage } from './imagegen.js';
 
 const ROLES = [
   { day: 1, role: '痛点共鸣', goal: '让目标用户觉得"说的就是我"' },
@@ -224,8 +228,8 @@ export async function generateWeek({ userIntent = '', postsPerDay = 1, days = 7,
 
   // 逐条过查重门禁（≥60% 自动重写，最多 3 次），再做落库
   const ins = db.prepare(`INSERT INTO contents
-    (source,title,body,tags,status,plan_id,dup_score,dup_with,created_at,updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?)`);
+    (source,title,body,tags,status,plan_id,day_index,dup_score,dup_with,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
   const finalItems = [];
   let saved = 0, blocked = 0;
   for (const it of data.items) {
@@ -236,23 +240,27 @@ export async function generateWeek({ userIntent = '', postsPerDay = 1, days = 7,
       log('error', 'generate', '查重失败（跳过门禁）: ' + e.message);
     }
     item.dupPass === false ? blocked++ : null;
+    let newId = null;
     try {
-      ins.run(
+      const insRes = ins.run(
         'generated',
         String(item.title || '').slice(0, 120),
         String(item.body || ''),
         JSON.stringify(item.tags || []),
         'draft',
         null,
+        Number(item.day) || null,
         item.dupScore ?? null,
         item.dupWith ?? null,
         now(), now(),
       );
+      newId = Number(insRes.lastInsertRowid);
       saved++;
     } catch (e) {
       log('error', 'generate', '存库失败: ' + e.message);
     }
     finalItems.push({
+      id: newId,
       day: item.day, title: item.title, pillar: item.pillar, reason: item.reason,
       tags: item.tags, dupScore: Number(((item.dupScore || 0) * 100).toFixed(0)),
       dupPass: item.dupPass !== false, rewrites: item.rewrites || 0,
@@ -263,5 +271,139 @@ export async function generateWeek({ userIntent = '', postsPerDay = 1, days = 7,
   return {
     ok: true, theme: data.theme, saved, blocked, total: data.items.length,
     items: finalItems, usage: r.usage, elapsed,
+  };
+}
+
+/* ---------------- 内容工坊编排（R19）：模式判定 / 自动配图 / 7 天清理 ---------------- */
+
+/** 已生成内容条数（auto 模式：0 条 → 7 天，否则 1 篇） */
+export function countGenerated() {
+  try { return Number(db.prepare("SELECT COUNT(*) AS n FROM contents WHERE source='generated'").get()?.n || 0); }
+  catch { return 0; }
+}
+
+/** 单篇模式的叙事起点：承接最近一条生成内容的 day_index 往后排（1..7 循环） */
+function nextDayIndex() {
+  try {
+    const r = db.prepare("SELECT day_index FROM contents WHERE source='generated' AND day_index IS NOT NULL ORDER BY id DESC LIMIT 1").get();
+    return (Number(r?.day_index || 0) % 7) + 1;
+  } catch { return 1; }
+}
+
+/** auto → seven/single（显式 mode 原样返回） */
+export function resolveGenerateMode(mode) {
+  const m = ['seven', 'single'].includes(mode) ? mode : 'auto';
+  if (m !== 'auto') return m;
+  return countGenerated() === 0 ? 'seven' : 'single';
+}
+
+/**
+ * 生成后逐篇自动配图（提示词 = 该内容标题 + 正文摘要，交 imagegen 扩写链路）。
+ * 单条失败不影响其它项：逐项返回 {ok, url|error}。
+ */
+export async function autoIllustrate(items, { tier = 'standard', ratio = '1:1', limit = 0 } = {}) {
+  const out = [];
+  let attempted = 0;
+  for (const it of items || []) {
+    if (!it || !it.id) { out.push({ id: it?.id ?? null, ok: false, error: '缺少内容ID，跳过' }); continue; }
+    if (limit > 0 && attempted >= limit) { out.push({ id: it.id, ok: false, skipped: true, error: `超出 imageLimit(${limit})，跳过` }); continue; }
+    attempted++;
+    try {
+      const row = db.prepare('SELECT title, body FROM contents WHERE id=?').get(it.id);
+      const prompt = `${row?.title || it.title || ''}｜${String(row?.body || '').slice(0, 150)}`;
+      const r = await generateImage({ prompt, tier, ratio, contentId: it.id });
+      const imgRow = db.prepare('SELECT images FROM contents WHERE id=?').get(it.id);
+      let arr = [];
+      try { arr = JSON.parse(imgRow?.images || '[]'); } catch { arr = []; }
+      if (!Array.isArray(arr)) arr = [];
+      arr.push({ path: r.file, url: r.url, type: 'generated', source: 'imagegen', assetId: r.assetId });
+      db.prepare('UPDATE contents SET images=?, updated_at=? WHERE id=?').run(JSON.stringify(arr), now(), it.id);
+      out.push({ id: it.id, ok: true, url: r.url, file: r.file, assetId: r.assetId, tier: r.tier });
+    } catch (e) {
+      log('error', 'generate', `自动配图失败 #${it.id}: ${e.message}`);
+      out.push({ id: it.id, ok: false, error: String(e.message).slice(0, 200) });
+    }
+  }
+  return out;
+}
+
+/**
+ * 统一生成入口（R19）：
+ *  - mode=auto：无生成内容 → 7 天；已有 → 1 篇。mode=seven/single 显式指定（此时忽略 days）。
+ *  - mode 缺省：沿用旧行为（days/startDay 生效，兼容旧前端）。
+ *  - withImages=true：生成后逐篇自动配图（imageTier/imageRatio/imageLimit 可选）。
+ */
+export async function runGeneration({
+  userIntent = '', postsPerDay = 1, mode = '', days = 0, startDay = 0,
+  dryRun = false, withImages = false, imageTier = 'standard', imageRatio = '1:1', imageLimit = 0,
+} = {}) {
+  const usesMode = ['auto', 'seven', 'single'].includes(mode);
+  let effMode, nDays, sd;
+  if (usesMode) {
+    effMode = resolveGenerateMode(mode);
+    nDays = effMode === 'seven' ? 7 : 1;
+    sd = Number(startDay) > 0 ? Math.min(Math.max(Number(startDay), 1), 7) : (effMode === 'seven' ? 1 : nextDayIndex());
+  } else {
+    effMode = 'custom';
+    nDays = Math.min(Math.max(Number(days) || 7, 1), 14);
+    sd = Math.min(Math.max(Number(startDay) || 1, 1), 7);
+  }
+  const gen = await generateWeek({ userIntent, postsPerDay, days: nDays, startDay: sd, dryRun });
+  gen.mode = effMode;
+  gen.days = nDays;
+  gen.startDay = sd;
+  if (!dryRun && withImages && Array.isArray(gen.items) && gen.items.length) {
+    gen.images = await autoIllustrate(gen.items, {
+      tier: imageTier === 'fine' ? 'fine' : 'standard',
+      ratio: imageRatio || '1:1',
+      limit: Number(imageLimit) || 0,
+    });
+    gen.imagesOk = gen.images.filter((x) => x.ok).length;
+    gen.imagesFailed = gen.images.filter((x) => !x.ok).length;
+  }
+  return gen;
+}
+
+/**
+ * 7 天自动清理（R19）：source='generated' 且 draft 且未排期 且未收藏 且生成超 7 天 → 删除。
+ * 排期判定：无 pending/awaiting_confirm/precheck/publishing/done/failed 任务（canceled 不算占用）。
+ * 由发布调度器每轮扫描顺带执行（挂进现有调度）；dryRun=true 只返回将删列表。
+ */
+export function purgeExpiredDrafts({ days = 7, dryRun = false } = {}) {
+  const cutoff = Date.now() - days * 86400000;
+  let rows = [];
+  try {
+    rows = db.prepare(`
+      SELECT c.id, c.title, c.created_at FROM contents c
+      WHERE c.source='generated' AND c.status='draft' AND COALESCE(c.favorite,0)=0
+        AND NOT EXISTS (
+          SELECT 1 FROM publish_tasks t
+          WHERE t.content_id = c.id
+            AND t.status IN ('pending','awaiting_confirm','precheck','publishing','done','failed')
+        )
+    `).all();
+  } catch (e) {
+    log('error', 'generate', '7 天清理扫描失败: ' + e.message);
+    return { ok: false, error: e.message, scanned: 0, expired: [], deleted: 0, dryRun };
+  }
+  const expired = rows.filter((r) => {
+    const t = r.created_at ? new Date(String(r.created_at).replace(' ', 'T')) : null;
+    return !!t && !Number.isNaN(t.getTime()) && t.getTime() < cutoff;
+  });
+  let deleted = 0;
+  if (!dryRun) {
+    for (const r of expired) {
+      try { db.prepare('DELETE FROM contents WHERE id=?').run(r.id); deleted++; }
+      catch (e) { log('error', 'generate', `7 天清理删除失败 #${r.id}: ${e.message}`); }
+    }
+  }
+  if (expired.length) {
+    log('info', 'generate', `7 天自动清理：${dryRun ? '待删' : '已删'} ${dryRun ? expired.length : deleted} 条（候选 ${rows.length}）`);
+  }
+  return {
+    ok: true, days, dryRun,
+    scanned: rows.length,
+    expired: expired.map((r) => ({ id: r.id, title: r.title, createdAt: r.created_at })),
+    deleted: dryRun ? 0 : deleted,
   };
 }

@@ -16,9 +16,9 @@
   --preview-frame: #32232c;
 }
 .theme-atelier .app-shell { grid-template-columns: 218px minmax(0, 1fr); }
-.theme-atelier .dashboard-grid { grid-template-columns: minmax(0, 1.48fr) minmax(280px, .85fr); grid-template-areas: "spot metrics" "schedule trend" "schedule ai" "feed feed"; }
-.theme-atelier .spotlight { grid-area: spot; min-height: 284px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(250px, .95fr); }
-.theme-atelier .spotlight-copy { padding: 24px 26px; }
+.theme-atelier .dashboard-grid { grid-template-columns: minmax(0, 1.48fr) minmax(280px, .85fr); grid-template-areas: "spot metrics" "schedule trend" "schedule ai"; }
+.theme-atelier .spotlight { grid-area: spot; min-height: 318px; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(250px, .95fr); }
+.theme-atelier .spotlight-copy { padding: 28px; }
 .theme-atelier .metric-zone { grid-area: metrics; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .theme-atelier .schedule { grid-area: schedule; }
 .theme-atelier .trend-card { grid-area: trend; }
@@ -26,7 +26,7 @@
 
 @media (max-width: 1180px) {
   .theme-atelier .app-shell { grid-template-columns: 192px minmax(0, 1fr); }
-  .theme-atelier .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai" "feed"; }
+  .theme-atelier .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "trend" "schedule" "ai"; }
 }
 @media (max-width: 900px) { .theme-atelier .app-shell { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .theme-atelier .spotlight { grid-template-columns: 1fr; }.theme-atelier .beauty-visual { min-height: 250px; } }

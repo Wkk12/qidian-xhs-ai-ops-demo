@@ -25,7 +25,7 @@
 .theme-lab .nav-item:hover > span:not(.nav-live) { opacity: 1; transform: translateX(0); }
 .theme-lab .nav-live { right: 9px; }
 .theme-lab .sidebar-foot { width: 100%; }.theme-lab .account-mini { padding: 12px 0; display: flex; justify-content: center; }.theme-lab .account-mini > span:nth-child(2), .theme-lab .account-mini > svg { display: none; }
-.theme-lab .dashboard-grid { grid-template-columns: minmax(0, 1.42fr) minmax(260px, .72fr) minmax(280px, .9fr); grid-template-areas: "spot metrics ai" "trend trend schedule"; }
+.theme-lab .dashboard-grid { grid-template-columns: minmax(0, 1.42fr) minmax(260px, .72fr) minmax(280px, .9fr); grid-template-areas: "spot metrics ai" "trend trend schedule" "feed feed feed"; }
 .theme-lab .spotlight { grid-area: spot; min-height: 318px; position: relative; }
 .theme-lab .spotlight-copy { position: relative; z-index: 2; width: 61%; padding: 28px; }
 .theme-lab .beauty-visual { position: absolute; inset: 0 0 0 44%; min-height: 100%; background: transparent; }
@@ -40,8 +40,8 @@
 .theme-lab .chart-wrap svg { height: 190px; }
 
 @media (max-width: 1280px) {
-  .theme-lab .dashboard-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "spot spot" "metrics ai" "trend schedule"; }
+  .theme-lab .dashboard-grid { grid-template-columns: 1fr 1fr; grid-template-areas: "spot spot" "metrics ai" "trend schedule" "feed feed"; }
   .theme-lab .metric-zone { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) { .theme-lab .app-shell { grid-template-columns: 1fr; } }
-@media (max-width: 680px) { .theme-lab .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "ai" "trend" "schedule"; }.theme-lab .spotlight-copy { width: 100%; }.theme-lab .beauty-visual { position: relative; inset: auto; min-height: 240px; } }
+@media (max-width: 680px) { .theme-lab .dashboard-grid { grid-template-columns: 1fr; grid-template-areas: "spot" "metrics" "ai" "trend" "schedule" "feed"; }.theme-lab .spotlight-copy { width: 100%; }.theme-lab .beauty-visual { position: relative; inset: auto; min-height: 240px; } }

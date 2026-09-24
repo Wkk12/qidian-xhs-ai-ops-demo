@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>T-W1 几何图草稿</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; padding:18px; display:flex; gap:22px; align-items:flex-start;
+         font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+         background:#e8e0dc; color:#2c2228; }
+  .item { display:grid; gap:9px; }
+  .tag { font-size:12px; font-weight:700; letter-spacing:.02em; color:#5a4149; }
+  .tag em { font-style:normal; font-weight:500; color:#8a737c; margin-left:6px; font-size:11px; }
+  .frame { position:relative; width:346px; height:318px; overflow:hidden; background:#ead7d7;
+           border:1px solid rgba(75,43,57,.12); border-radius:24px; box-shadow:0 18px 40px -28px rgba(81,55,68,.55); }
+  .frame svg { position:absolute; inset:0; width:100%; height:100%; }
+  .caption { position:absolute; left:17px; right:17px; bottom:15px; padding:12px 14px;
+             border:1px solid rgba(96,55,72,.10); border-radius:14px; background:rgba(253,248,246,.72); }
+  .caption span { display:block; color:#81737a; font-size:9px; }
+  .caption b { display:block; margin-top:4px; font-size:11px; color:#2c2228; }
+  .note { margin-top:2px; font-size:10px; color:#8a737c; width:346px; line-height:1.7; }
+</style></head><body>
+<div class="item">
+  <div class="tag">版本 A<em>「晨环」极简光环</em></div>
+  <div class="frame"><!-- T-W1 草稿 A ·「晨环」极简光环（Eclipse Ring）
+     用途：替换「今日运营」spotlight 区块中间的面部线稿图（beauty-visual）
+     规格：viewBox 0 0 420 380（与旧图一致，可直接换装）；颜色全走主题变量，随三套主题自适应
+     设计语言：大留白 + 细线正圆 + 一段加粗强调弧 + 实心圆盘 + 一条基线，时尚编辑感
+     版式注意：母题玻璃卡片压在框底 15~72px（viewBox y≈295 以下），故落点线放在 y=268 -->
+<svg class="geo-art" viewBox="0 0 420 380" role="img" aria-label="本周内容母题视觉图 · 极简光环">
+  <defs>
+    <linearGradient id="geoA-skin" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--visual-soft, #f0c9c0)" />
+      <stop offset="1" stop-color="var(--visual-deep, #c87f82)" />
+    </linearGradient>
+    <filter id="geoA-blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="26" />
+    </filter>
+    <style>
+      .geoA-halo { fill: var(--visual-halo, rgba(255,239,229,.85)); }
+      .geoA-ring { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 2; }
+      .geoA-arc { fill: none; stroke: var(--accent, #a4294b); stroke-width: 6; stroke-linecap: round; }
+      .geoA-rule { fill: none; stroke: var(--visual-line, #713d51); stroke-width: 1.2; opacity: .3; }
+      .geoA-disc { fill: var(--accent, #a4294b); }
+      .geoA-dot { fill: var(--accent-two, #d99389); }
+    </style>
+  </defs>
+
+  <!-- 柔光底 -->
+  <circle class="geoA-halo" cx="212" cy="146" r="130" filter="url(#geoA-blur)" />
+  <!-- 主环：细线正圆 -->
+  <circle class="geoA-ring" cx="212" cy="146" r="106" />
+  <!-- 强调弧：右上四分之一，加粗上色 -->
+  <path class="geoA-arc" d="M212 40A106 106 0 0 1 318 146" />
+  <!-- 落在弧端的实心圆盘 -->
+  <circle class="geoA-disc" cx="318" cy="146" r="13" />
+  <!-- 落点基线与端点 -->
+  <path class="geoA-rule" d="M64 268H360" />
+  <circle class="geoA-dot" cx="64" cy="268" r="5" />
+</svg>
+<div class="caption"><span>本周统一内容母题</span><b>还没有设定 · 去运营大纲创建</b></div></div>
+  <div class="note">细线正圆 + 右上加粗弧 + 两端圆点，大留白，最简；远看像编辑页上的「光环」符号。</div>
+</div>
+</body></html>

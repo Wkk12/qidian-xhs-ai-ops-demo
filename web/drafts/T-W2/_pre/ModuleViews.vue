@@ -291,6 +291,21 @@ const libraryRows = computed(() =>
   }),
 )
 
+// 高潜内容方向：按内容库真实构成统计（替代原假话题榜）
+const topicRanks = computed(() => {
+  const items = libraryItems.value
+  const total = items.length || 1
+  const bySource = {}
+  for (const it of items) {
+    const k = it.source === 'history' ? '历史笔记' : (it.source === 'generated' ? 'AI 生成' : '手动录入')
+    bySource[k] = (bySource[k] || 0) + 1
+  }
+  return Object.entries(bySource)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([name, cnt]) => ({ name, value: Math.round((cnt / total) * 100), grow: cnt + ' 篇' }))
+})
+
 const maxSimilarity = computed(() => {
   const arr = libraryRows.value.map((r) => r.similarity).filter((v) => typeof v === 'number')
   return arr.length ? Math.max(...arr) : null
@@ -339,7 +354,7 @@ async function loadContents() {
 const onViewChange = (v) => {
   if (v === 'settings') { loadRealStatus(); loadComments() }
   if (v === 'assets') { loadAssets(); api.imageStatus().then(r => { imgStatus.value = r }).catch(() => {}) }
-  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadPerformance() }
+  if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadManual() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
   if (v === 'library') loadLibrary()
   if (v === 'schedule') { loadContents(); loadPublish(true); loadScheduler() }
@@ -536,58 +551,49 @@ async function addKnowledgeItem() {
   } catch (e) { showNotice('添加失败：' + (e.message || '')) }
 }
 
-/* -------- 数据洞察（R21）：逐篇数据（契约3）+ AI 整体解读/高潜方向（契约2） -------- */
-const perf = ref(null)
-const perfLoading = ref(false)
-const perfError = ref('')
+/* -------- 手工填报（R13：咨询数/到店数） -------- */
+const manualRows = ref([])
+const manualTotal = ref({ inquiries: 0, visits: 0 })
+const manualForm = ref({ date: new Date().toISOString().slice(0, 10), inquiries: '', visits: '', note: '' })
+const manualSaving = ref(false)
+const manualError = ref('')
 
-async function loadPerformance() {
-  perfLoading.value = true
-  perfError.value = ''
+async function loadManual() {
+  manualError.value = ''
   try {
-    const r = await api.performance(30)
-    perf.value = r
+    const r = await api.manualMetrics(30)
+    manualRows.value = r.items || []
+    manualTotal.value = r.total || { inquiries: 0, visits: 0 }
   } catch (e) {
-    perfError.value = '读取逐篇数据失败：' + (e.message || '未知错误')
-    perf.value = null
-  } finally {
-    perfLoading.value = false
+    manualError.value = '读取手工填报失败：' + (e.message || '')
   }
 }
 
-// 契约2 真调 DeepSeek（约 5–15 秒）：一次生成同时填充「整体数据分析解读」与「高潜内容方向」；
-// 不随页面自动触发，避免每次进页面都产生 AI 费用
-const insight = ref(null)
-const insightLoading = ref(false)
-const insightError = ref('')
-
-async function loadInsight() {
-  if (insightLoading.value) return
-  insightLoading.value = true
-  insightError.value = ''
+async function saveManual() {
+  manualSaving.value = true
+  manualError.value = ''
   try {
-    insight.value = await api.insight()
+    await api.saveManualMetrics({
+      date: manualForm.value.date,
+      inquiries: manualForm.value.inquiries === '' ? 0 : Number(manualForm.value.inquiries),
+      visits: manualForm.value.visits === '' ? 0 : Number(manualForm.value.visits),
+      note: manualForm.value.note,
+    })
+    showNotice('已保存（同日重复录入会覆盖）')
+    await loadManual()
   } catch (e) {
-    // 契约2 的 ok:false（无 Key / 样本不足 / AI 失败）会带 reason；req() 统一抛出，优先读 e.data.reason
-    insightError.value = (e && e.data && e.data.reason) || (e && e.message) || '未知错误'
-    insight.value = null
+    manualError.value = '保存失败：' + (e.message || '')
   } finally {
-    insightLoading.value = false
+    manualSaving.value = false
   }
 }
 
-// generated_at 兼容（13 位毫秒 / 10 位秒 / 字符串时间）
-const fmtInsightTime = (t) => {
-  if (!t) return ''
-  const raw = String(t)
-  let ms = NaN
-  if (/^\d{13}$/.test(raw)) ms = Number(raw)
-  else if (/^\d{10}$/.test(raw)) ms = Number(raw) * 1000
-  else ms = Date.parse(raw.replace(' ', 'T'))
-  if (!Number.isFinite(ms)) return raw.slice(0, 16)
-  const d = new Date(ms)
-  const p = (n) => String(n).padStart(2, '0')
-  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+async function deleteManual(date) {
+  if (!window.confirm('删除 ' + date + ' 的填报？')) return
+  try {
+    await api.deleteManualMetrics(date)
+    await loadManual()
+  } catch (e) { showNotice('删除失败：' + (e.message || '')) }
 }
 
 /* -------- 复盘报告与建议（R12） -------- */
@@ -1229,37 +1235,6 @@ const chartLabelX = (i, arr) => {
   return CHART.x0 + i * (CHART.w / n)
 }
 
-// R21 重排：数据点多时 x 轴标签均匀抽 7 个（30 天全画会挤成一排）
-const chartTicks = computed(() => {
-  const list = platformPoints.value.length >= 2 ? platformPoints.value : trendPoints.value
-  if (list.length <= 8) return list.map((p, i) => ({ key: p.date + '_' + i, i, date: p.date }))
-  const idx = []
-  for (let k = 0; k < 7; k++) idx.push(Math.round((k * (list.length - 1)) / 6))
-  return [...new Set(idx)].map((i) => ({ key: list[i].date + '_' + i, i, date: list[i].date }))
-})
-
-// R21 重排：曲线末端值与峰值标注
-const chartMarks = computed(() => {
-  const pts = platformPoints.value.length >= 2
-    ? platformPoints.value.map((p) => ({ date: p.date, value: p.value }))
-    : trendPoints.value.map((p) => ({ date: p.date, value: p.likes }))
-  if (pts.length < 2) return []
-  const max = Math.max(...pts.map((p) => p.value), 1)
-  const step = CHART.w / (pts.length - 1)
-  const at = (i) => ({ x: CHART.x0 + i * step, y: CHART.y0 - (pts[i].value / max) * CHART.h })
-  let maxI = 0
-  pts.forEach((p, i) => { if (p.value > pts[maxI].value) maxI = i })
-  const marks = []
-  const lastI = pts.length - 1
-  const lastP = at(lastI)
-  marks.push({ kind: 'last', x: lastP.x, y: lastP.y, label: pts[lastI].value.toLocaleString(), anchor: 'end' })
-  if (maxI !== lastI && maxI !== 0) {
-    const pkP = at(maxI)
-    marks.push({ kind: 'peak', x: pkP.x, y: pkP.y, label: pts[maxI].value.toLocaleString(), anchor: 'middle' })
-  }
-  return marks
-})
-
 watch(() => props.activeView, onViewChange)
 
 // 七天内容卡片复用同一条认知到转化的故事线。
@@ -1676,121 +1651,72 @@ onBeforeUnmount(() => {
       </div>
       <div class="analytics-main">
         <article class="insight-chart panel">
-          <div class="panel-head chart-head">
-            <div>
-              <span class="section-label">CONTENT PERFORMANCE</span>
-              <h3>内容增长趋势 · 浏览量</h3>
-            </div>
-            <div class="chart-window">
-              <button v-for="w in ['seven', 'thirty']" :key="w" type="button" :class="['filter-chip', { active: creatorWindow === w }]" @click="creatorWindow = w">{{ w === 'seven' ? '近 7 天' : '近 30 天' }}</button>
-            </div>
-          </div>
-          <p v-if="creatorError" class="chart-error">{{ creatorError }}</p>
-          <div class="chart-body">
-            <svg v-if="chartLine" class="chart-svg" viewBox="0 0 720 260" role="img" aria-label="浏览量趋势图">
-              <g class="insight-grid"><path d="M45 36H690M45 92H690M45 148H690M45 204H690" /></g>
-              <path class="insight-area" :d="chartArea" />
-              <path class="insight-line" :d="chartLine" />
-              <g class="insight-marks">
-                <template v-for="m in chartMarks" :key="m.kind">
-                  <circle class="mark-dot" :cx="m.x" :cy="m.y" r="3.5" />
-                  <text class="mark-label" :x="m.x" :y="m.y - 11" :text-anchor="m.anchor">{{ m.label }}</text>
-                </template>
-              </g>
-              <g class="insight-labels"><text v-for="t in chartTicks" :key="t.key" :x="chartLabelX(t.i)" y="244">{{ t.date }}</text></g>
-            </svg>
-            <div v-else class="chart-empty">
-              <b>趋势数据积累中</b>
-              <p>点下方「采集今日数据」记录今天的互动快照；连续采集 2 天以上就会显示真实曲线。</p>
-              <p>当前已有快照：{{ metricsRows.length }} 条</p>
-            </div>
-          </div>
-          <div class="chart-foot">
-            <span class="chart-source">
-              <template v-if="creatorData">数据来源：小红书创作者中心（平台官方数据）</template>
-              <template v-else-if="creatorLoading">正在读取平台数据…</template>
-              <template v-else>数据来源：小红书创作者中心</template>
-            </span>
-            <button class="ghost-mini" type="button" :disabled="collecting" @click="collectToday">
-              <RefreshCw :size="13" />{{ collecting ? '采集中…' : '采集今日数据' }}
-            </button>
+          <div class="panel-head"><div><span class="section-label">CONTENT PERFORMANCE</span><h3>内容增长趋势 · 浏览量</h3></div><div style="display:flex;gap:8px;align-items:center"><button v-for="w in ['seven', 'thirty']" :key="w" type="button" :class="['filter-chip', { active: creatorWindow === w }]" @click="creatorWindow = w">{{ w === 'seven' ? '近 7 天' : '近 30 天' }}</button><button class="outline-button" type="button" :disabled="collecting" @click="collectToday"><RefreshCw :size="15" />{{ collecting ? '采集中…' : '采集今日数据' }}</button></div></div>
+          <p v-if="creatorError" style="margin:0 0 8px;color:#b4544a">{{ creatorError }}</p>
+          <p v-else-if="creatorData" style="margin:0 0 8px;color:#8b8175;font-size:12px">数据来源：小红书创作者中心（平台官方数据）</p>
+          <p v-else-if="creatorLoading" style="margin:0 0 8px;color:#8b8175;font-size:12px">正在读取平台数据…</p>
+          <svg v-if="chartLine" viewBox="0 0 720 260" role="img" aria-label="浏览量趋势图">
+            <g class="insight-grid"><path d="M45 36H690M45 92H690M45 148H690M45 204H690" /></g>
+            <path class="insight-area" :d="chartArea" />
+            <path class="insight-line" :d="chartLine" />
+            <g class="insight-labels"><text v-for="(p, i) in (platformPoints.length >= 2 ? platformPoints : trendPoints)" :key="p.date" :x="chartLabelX(i, platformPoints.length >= 2 ? platformPoints : trendPoints)" y="244">{{ p.date }}</text></g>
+          </svg>
+          <div v-else style="padding:30px 18px;text-align:center;color:#8b8175">
+            <b style="display:block;margin-bottom:6px">趋势数据积累中</b>
+            <p style="margin:0">点右上角「采集今日数据」记录今天的互动快照；连续采集 2 天以上就会显示真实曲线。</p>
+            <p style="margin:6px 0 0">当前已有快照：{{ metricsRows.length }} 条</p>
           </div>
         </article>
         <article class="topic-rank panel">
           <div class="panel-head"><div><span class="section-label">TOP TOPICS</span><h3>高潜内容方向</h3></div><BarChart3 :size="19" /></div>
-          <div v-if="insightLoading" class="topic-empty">AI 正在分析真实数据…（约 5–15 秒）</div>
-          <div v-else-if="insight && insight.suggestions.length" class="topic-tips">
-            <div v-for="(s, i) in insight.suggestions" :key="'ts' + i" class="topic-tip">
-              <b>{{ s.direction }}</b>
-              <small>{{ s.reason }}</small>
-              <span>{{ s.action }}</span>
-            </div>
+          <div class="rank-list">
+            <div v-for="(item, index) in topicRanks" :key="item.name"><span>{{ index + 1 }}</span><b>{{ item.name }}</b><i><em :style="{ width: `${item.value}%` }" /></i><small>{{ item.grow }}</small></div>
           </div>
-          <div v-else-if="insightError" class="topic-empty">生成失败：{{ insightError }}<br />可点下方「重新生成」重试。</div>
-          <div v-else-if="insight" class="topic-empty">本次生成未给出方向建议（样本较少，先多积累几篇笔记数据再生成）。</div>
-          <div v-else class="topic-empty">点下方「生成 AI 解读」，这里会按真实数据给出 2~4 条方向建议（含依据和具体动作）。</div>
         </article>
       </div>
-      <!-- ===== 整体数据分析解读（R21 · 契约2）===== -->
-      <article class="insight-ai panel">
-        <div class="panel-head">
-          <div>
-            <span class="section-label">AI INSIGHT · 整体数据分析解读</span>
-            <h3>把账号数据（浏览量趋势 / 互动 / 最佳内容）做一段整体解读</h3>
-            <p v-if="insight" class="insight-meta">
-              生成于 {{ fmtInsightTime(insight.generated_at) }} · 本机样本 {{ insight.sources.metricNotes }} 篇
-              <template v-if="insight.sources.creator30d"> · 含创作者中心近 30 天数据</template>
-              <template v-else-if="insight.sources.creatorError"> · 创作者中心未取到：{{ insight.sources.creatorError }}</template>
-            </p>
-          </div>
-          <button class="outline-button" type="button" :disabled="insightLoading" @click="loadInsight">
-            <Sparkles :size="15" />{{ insightLoading ? '解读生成中…' : (insight ? '重新生成' : '生成 AI 解读') }}
-          </button>
+      <!-- ===== 手工填报（R13）===== -->
+      <article class="module-toolbar panel" style="margin-top:16px">
+        <div><span class="section-label">MANUAL INPUT</span><h2>手工填报 · 咨询数 / 到店数</h2>
+        <p>平台不提供这两项业务数据，需每日手工录入（同日重复录入会覆盖）</p></div>
+        <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">日期
+            <input v-model="manualForm.date" type="date" style="padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">咨询数
+            <input v-model="manualForm.inquiries" type="number" min="0" step="1" style="width:92px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:#8b8175">到店数
+            <input v-model="manualForm.visits" type="number" min="0" step="1" style="width:92px;padding:7px 10px;border:1px solid #e3dcd2;border-radius:8px;font-size:13px" />
+          </label>
+          <button class="outline-button" type="button" :disabled="manualSaving" @click="saveManual">{{ manualSaving ? '保存中…' : '保存' }}</button>
         </div>
-        <div v-if="insightLoading" class="insight-state">正在结合真实数据生成解读（约 5–15 秒，走真实 AI）…</div>
-        <template v-else-if="insight">
-          <p class="insight-summary">{{ insight.summary }}</p>
-          <ul v-if="insight.highlights.length" class="insight-highlights">
-            <li v-for="(h, i) in insight.highlights" :key="'hl' + i">{{ h }}</li>
-          </ul>
-        </template>
-        <div v-else-if="insightError" class="insight-state bad">
-          <b>当前无法生成：</b>{{ insightError }}
-          <button class="ghost-mini" type="button" @click="loadInsight"><RefreshCw :size="13" />重试</button>
-        </div>
-        <div v-else class="insight-state">还没有生成过解读 —— 点右上角「生成 AI 解读」，系统会结合平台 30 天数据与本机笔记数据，输出整体解读与关键发现（每次生成都走真实 AI，约 5–15 秒）。</div>
       </article>
 
-      <!-- ===== 逐篇文章的数据情况（R21 · 契约3）===== -->
-      <article class="perf-panel panel">
-        <div class="panel-head">
-          <div>
-            <span class="section-label">PER-NOTE PERFORMANCE</span>
-            <h3>逐篇文章的数据情况</h3>
-            <p class="insight-meta">标题 / 日期 / 浏览 / 点赞 / 收藏 / 评论 —— 有则显示，缺则标注「缺」，不用 0 冒充{{ perf && perf.count ? ' · 共 ' + perf.count + ' 篇' : '' }}</p>
-          </div>
-          <button class="ghost-mini" type="button" :disabled="perfLoading" @click="loadPerformance"><RefreshCw :size="13" />{{ perfLoading ? '读取中…' : '刷新' }}</button>
+      <p v-if="manualError" class="panel" style="padding:12px 16px">{{ manualError }}</p>
+
+      <div class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px">
+        <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:10px">
+          <div><span class="section-label">近 30 天合计</span><b style="font-size:18px">{{ manualTotal.inquiries }}</b> 咨询</div>
+          <div><span class="section-label">&nbsp;</span><b style="font-size:18px">{{ manualTotal.visits }}</b> 到店</div>
+          <div style="align-self:flex-end;color:#8b8175">来源：<b>手工填报</b>（区别于平台数据）</div>
         </div>
-        <div v-if="perfError" class="insight-state bad">{{ perfError }}</div>
-        <div v-else-if="perfLoading && !perf" class="insight-state">正在读取逐篇数据…</div>
-        <div v-else-if="perf && perf.items.length" class="perf-table-wrap">
-          <table class="perf-table">
-            <thead><tr><th>标题</th><th>日期</th><th>浏览</th><th>点赞</th><th>收藏</th><th>评论</th></tr></thead>
-            <tbody>
-              <tr v-for="(n, i) in perf.items" :key="'pn' + i">
-                <td class="pn-title" :title="n.title">{{ n.title }}</td>
-                <td>{{ n.date || '缺' }}</td>
-                <td>{{ n.views === null ? '缺' : n.views.toLocaleString() }}</td>
-                <td>{{ n.likes === null ? '缺' : n.likes.toLocaleString() }}</td>
-                <td>{{ n.collects === null ? '缺' : n.collects.toLocaleString() }}</td>
-                <td>{{ n.comments === null ? '缺' : n.comments.toLocaleString() }}</td>
-              </tr>
-            </tbody>
-          </table>
-          <p class="perf-note">「缺」= 尚未采集到或平台不提供该项（例如平台暂不提供逐篇浏览量）；系统不会用 0 冒充。</p>
-        </div>
-        <div v-else class="insight-state">还没有可统计的笔记 —— 先导入历史笔记或完成一次发布。</div>
-      </article>
+        <div v-if="!manualRows.length" style="color:#8b8175">还没有填报记录 —— 用上面的表单录入今天的数据。</div>
+        <table v-else style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:#8b8175;text-align:left">
+            <th style="padding:6px 4px">日期</th><th style="padding:6px 4px">咨询数</th>
+            <th style="padding:6px 4px">到店数</th><th style="padding:6px 4px">备注</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="m in manualRows" :key="'mm' + m.date" style="border-top:1px solid #f0ebe3">
+              <td style="padding:6px 4px">{{ m.date }}</td>
+              <td style="padding:6px 4px">{{ m.inquiries }}</td>
+              <td style="padding:6px 4px">{{ m.visits }}</td>
+              <td style="padding:6px 4px;color:#8b8175">{{ m.note || '—' }}</td>
+              <td style="padding:6px 4px"><button type="button" style="color:#b4544a" @click="deleteManual(m.date)">删除</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <!-- ===== 复盘报告与建议（R12）===== -->
       <article class="strategy-card panel" style="margin-top:16px">

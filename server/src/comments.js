@@ -169,10 +169,11 @@ function saveComment({ noteId, noteTitle, commentId, userId, userName, content, 
   const exist = db.prepare('SELECT id, replied, reply_status FROM comments WHERE comment_id = ?').get(commentId);
   if (exist) return { existing: true, id: exist.id, status: exist.reply_status };
   const info = db.prepare(`INSERT INTO comments
-    (note_id, comment_id, user_name, content, replied, reply_text, reply_status, created_at, note_title, user_id, skip_reason)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    (note_id, comment_id, user_name, content, replied, reply_text, reply_status, created_at, note_title, user_id, skip_reason, replied_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(noteId, commentId, userName, content, status === 'auto' ? 1 : 0,
-         replyText || '', status, now(), noteTitle || '', userId || '', skipReason || '');
+         replyText || '', status, now(), noteTitle || '', userId || '', skipReason || '',
+         status === 'auto' ? now() : null);
   return { existing: false, id: Number(info.lastInsertRowid), status };
 }
 
@@ -309,7 +310,7 @@ export async function approveComment(id) {
   if (c.replied) return { ok: true, already: true };
   const sent = await sendReply({ commentId: c.comment_id, noteId: c.note_id, content: c.reply_text });
   if (!sent.ok) throw Object.assign(new Error(sent.error || '发送失败'), { status: 502 });
-  db.prepare("UPDATE comments SET replied = 1, reply_status = 'manual', created_at = created_at WHERE id = ?").run(Number(id));
+  db.prepare("UPDATE comments SET replied = 1, reply_status = 'manual', replied_at = ? WHERE id = ?").run(now(), Number(id));
   return { ok: true };
 }
 
@@ -321,7 +322,7 @@ export async function manualReply(id, text) {
   if (!content) throw Object.assign(new Error('回复内容不能为空'), { status: 400 });
   const sent = await sendReply({ commentId: c.comment_id, noteId: c.note_id, content });
   if (!sent.ok) throw Object.assign(new Error(sent.error || '发送失败'), { status: 502 });
-  db.prepare("UPDATE comments SET replied = 1, reply_text = ?, reply_status = 'manual' WHERE id = ?").run(content, Number(id));
+  db.prepare("UPDATE comments SET replied = 1, reply_text = ?, reply_status = 'manual', replied_at = ? WHERE id = ?").run(content, now(), Number(id));
   takeover(c.user_id, c.user_name, '人工回复过');
   return { ok: true, takeover: true };
 }

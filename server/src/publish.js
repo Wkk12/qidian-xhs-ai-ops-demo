@@ -6,11 +6,17 @@
  *   调度：每 60 秒扫描；预检：计划发布前 15 分钟
  *   重试：最多 3 次（指数退避）；发布间隔 ≥30 分钟（防风控）
  *   重启可恢复：全部状态落在 publish_tasks 表
+ *
+ * R20 增补（排期发布改版）：
+ *   auto_send（默认开）：开=到点直接发送；关=到点转「awaiting_confirm 待确认」，人工确认后发送
+ *   publish_protect（默认开）：开=五项预检全过才发送；关=跳过预检直接发送
+ *   actual_sent_at：真实发送时间落库；tasks 列表带内容快照（title/body/images/tags）并支持 ?from&to
  */
 import fs from 'node:fs';
 import { db, now, log } from './db.js';
 import { mcp } from './mcp.js';
 import { checkDuplicate } from './dedupe.js';
+import { purgeExpiredDrafts } from './generate.js';
 
 export const PRE_MINUTES = 15;   // 提前多少分钟预检
 export const MIN_GAP_MINUTES = 30; // 同账号两次发布最小间隔
@@ -29,19 +35,34 @@ function parseWhen(s) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** 任务 + 关联内容（联表视图） */
-export function listTasks({ limit = 50 } = {}) {
+/** 任务 + 关联内容（联表视图；含 R20 展开预览所需的完整内容快照） */
+export function listTasks({ limit = 200, from = null, to = null } = {}) {
+  const norm = (s, end = false) => {
+    const v = String(s == null ? '' : s).trim();
+    if (!v) return null;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v + (end ? 'T23:59:59' : 'T00:00:00');
+    return v.replace(' ', 'T');
+  };
+  const f = norm(from), t2 = norm(to, true);
+  const where = [];
+  const args = [];
+  if (f) { where.push('t.scheduled_at >= ?'); args.push(f); }
+  if (t2) { where.push('t.scheduled_at <= ?'); args.push(t2); }
   return db.prepare(`
-    SELECT t.*, c.title AS content_title, c.status AS content_status, c.images AS content_images
+    SELECT t.*, c.title AS content_title, c.body AS content_body, c.status AS content_status,
+           c.images AS content_images, c.tags AS content_tags
     FROM publish_tasks t
     LEFT JOIN contents c ON c.id = t.content_id
-    ORDER BY CASE t.status WHEN 'pending' THEN 0 WHEN 'publishing' THEN 1 WHEN 'failed' THEN 2 ELSE 3 END,
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY CASE t.status WHEN 'pending' THEN 0 WHEN 'awaiting_confirm' THEN 1 WHEN 'publishing' THEN 2 WHEN 'failed' THEN 3 ELSE 4 END,
              t.scheduled_at ASC
     LIMIT ?
-  `).all(limit).map((t) => {
+  `).all(...args, Number(limit) || 200).map((t) => {
     let images = [];
     try { images = JSON.parse(t.content_images || '[]'); } catch { images = []; }
-    return { ...t, images };
+    let tags = [];
+    try { tags = JSON.parse(t.content_tags || '[]'); } catch { tags = []; }
+    return { ...t, images, tags };
   });
 }
 
@@ -201,11 +222,55 @@ export function cancelTask(taskId) {
   return { ok: true };
 }
 
-/** 真正发布（会调用小红书通道，产生真实副作用） */
+/** 人工确认发布（R20）：仅「待确认」任务可确认；发布保护开启时仍会过五项预检 */
+export async function confirmTask(taskId) {
+  const t = db.prepare('SELECT * FROM publish_tasks WHERE id=?').get(taskId);
+  if (!t) throw Object.assign(new Error('任务不存在'), { status: 404 });
+  if (t.status !== 'awaiting_confirm') {
+    throw Object.assign(new Error(`任务状态为 ${t.status}，不是「待确认」，无法确认`), { status: 400 });
+  }
+  log('warn', 'publish', `人工确认发布 #${taskId}`);
+  return runTask(taskId);
+}
+
+/**
+ * 批量排期（R19「生成后可选放到哪天发送」）：按数组顺序从 startDate 起每天一条，
+ * 时间 time（HH:mm；非法/缺省 → 用建议发布时间）。时间已过/单条失败 → 该项 ok:false，不影响其它项。
+ */
+export function scheduleBatch(items, { startDate = '', time = '' } = {}) {
+  const raw = String(startDate || '').trim();
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? parseWhen(raw + 'T00:00') : parseWhen(raw);
+  if (!base) throw Object.assign(new Error('startDate 格式应为 YYYY-MM-DD'), { status: 400 });
+  let hhmm = String(time || '').trim();
+  if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(hhmm)) hhmm = bestPublishTime().recommended;
+  const out = [];
+  (items || []).forEach((it, i) => {
+    const id = it && it.id ? Number(it.id) : null;
+    if (!id) { out.push({ id: null, title: (it && it.title) || '', ok: false, error: '缺少内容ID' }); return; }
+    const d = new Date(base.getTime() + i * 86400000);
+    const p = (n) => String(n).padStart(2, '0');
+    const at = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${hhmm}`;
+    const when = parseWhen(at);
+    if (!when || when.getTime() <= Date.now()) {
+      out.push({ id, title: it.title || '', ok: false, error: `排期时间 ${at} 早于/等于当前时间，未排期` });
+      return;
+    }
+    try {
+      const r = schedulePublish(id, at);
+      out.push({ id, title: it.title || '', ok: true, taskId: r.taskId, scheduledAt: r.scheduledAt, existing: !!r.existing });
+    } catch (e) {
+      out.push({ id, title: it.title || '', ok: false, error: e.message });
+    }
+  });
+  log('info', 'publish', `批量排期：${out.filter((x) => x.ok).length}/${out.length} 条`);
+  return out;
+}
+
+/** 真正发布（会调用小红书通道，产生真实副作用）。发布保护关闭时跳过五项预检。 */
 export async function runTask(taskId, { skipPrecheck = false } = {}) {
   const t = db.prepare('SELECT * FROM publish_tasks WHERE id=?').get(taskId);
   if (!t) throw Object.assign(new Error('任务不存在'), { status: 404 });
-  if (!['pending', 'precheck', 'failed'].includes(t.status)) {
+  if (!['pending', 'precheck', 'failed', 'awaiting_confirm'].includes(t.status)) {
     return { ok: false, error: `任务状态为 ${t.status}，不能发布` };
   }
   const c = db.prepare('SELECT * FROM contents WHERE id=?').get(t.content_id);
@@ -214,7 +279,8 @@ export async function runTask(taskId, { skipPrecheck = false } = {}) {
     return { ok: false, error: '内容已被删除' };
   }
 
-  if (!skipPrecheck) {
+  const effSkip = skipPrecheck || !isProtectEnabled();   // 发布保护关闭 → 跳过五项预检
+  if (!effSkip) {
     const pc = await precheck(c.id);
     db.prepare("UPDATE publish_tasks SET status='precheck', updated_at=? WHERE id=?").run(now(), taskId);
     if (!pc.pass) {
@@ -239,8 +305,8 @@ export async function runTask(taskId, { skipPrecheck = false } = {}) {
       tags,
     });
     const noteId = r?.data?.data?.note_id || r?.data?.note_id || r?.data?.data?.id || null;
-    db.prepare("UPDATE publish_tasks SET status='done', note_id=?, error=NULL, updated_at=? WHERE id=?")
-      .run(noteId, now(), taskId);
+    db.prepare("UPDATE publish_tasks SET status='done', note_id=?, actual_sent_at=?, error=NULL, updated_at=? WHERE id=?")
+      .run(noteId, now(), now(), taskId);
     db.prepare("UPDATE contents SET status='published', updated_at=? WHERE id=?").run(now(), c.id);
     log('info', 'publish', `发布成功 #${taskId} → note ${noteId || '(未返回ID)'}`);
     return { ok: true, noteId, raw: r };
@@ -254,40 +320,66 @@ export async function runTask(taskId, { skipPrecheck = false } = {}) {
   }
 }
 
-/* ---------------- 调度器（每 60 秒，可暂停） ----------------
- * 2026-09-23 改造：原前端「自动发布调度 · 已开启」是写死文案，服务端也从不读任何开关
- * → 双向假数据。现在开关真实落在本机 settings 表（key=scheduler_enabled），
- *   默认 '1'（开启），与改造前行为一致；暂停期间不自动扫描，手动「立即发布」不受影响。
+/* ---------------- 调度器（每 60 秒） + R20 双开关 ----------------
+ * 2026-09-23 改造：开关真实落 settings 表，不再写死。
+ * 2026-09-24（R20）再改造：旧「自动发布调度（暂停扫描）」的开关位被「自动发送」承接——
+ *   自动发送开 = 到点直接发送；关 = 到点转「待确认」（awaiting_confirm），人工确认后发送。
+ *   扫描恒开（旧键 scheduler_enabled 不再参与判定）；发布保护 publish_protect
+ *   开（默认）= 五项预检全过才发送；关 = 跳过预检直接发送。
  */
 
-const SCHEDULER_KEY = 'scheduler_enabled';
-
 let ticking = false;
-let lastTickAt = null;   // 最近一次真正执行扫描的时间（暂停期间不更新）
+let lastTickAt = null;   // 最近一次真正执行扫描的时间
 
-export function isSchedulerEnabled() {
-  const row = db.prepare('SELECT value FROM settings WHERE key=?').get(SCHEDULER_KEY);
-  return row ? String(row.value) !== '0' : true;
+/* 设置读写（settings 表） */
+function getSetting(key, def) {
+  const row = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+  return row && row.value !== null && row.value !== undefined ? String(row.value) : def;
 }
-
-export function setSchedulerEnabled(enabled) {
-  const v = enabled ? '1' : '0';
+function putSetting(key, value) {
   db.prepare(`INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)
               ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
-    .run(SCHEDULER_KEY, v, now());
-  log('warn', 'publish', `自动发布调度已${enabled ? '开启' : '暂停'}`);
-  return isSchedulerEnabled();
+    .run(key, String(value), now());
 }
 
-// 给前端读的真实状态（前端不允许再写死「已开启」）
+/** 自动发送：默认开（= 改造前「到点自动发」行为）；关 → 到点转「待确认」 */
+export function isAutoSendEnabled() { return getSetting('auto_send', '1') !== '0'; }
+/** 发布保护：默认开；关 → 跳过五项预检直接发送 */
+export function isProtectEnabled() { return getSetting('publish_protect', '1') !== '0'; }
+
+export function publishSettings() {
+  return { autoSend: isAutoSendEnabled(), protect: isProtectEnabled(), preMinutes: PRE_MINUTES, intervalSec: 60 };
+}
+
+export function setPublishSettings({ autoSend, protect } = {}) {
+  if (autoSend !== undefined) {
+    putSetting('auto_send', autoSend ? '1' : '0');
+    log('warn', 'publish', `自动发送已${autoSend ? '开启（到点直接发送）' : '关闭（到点需人工确认）'}`);
+  }
+  if (protect !== undefined) {
+    putSetting('publish_protect', protect ? '1' : '0');
+    log('warn', 'publish', `发布保护已${protect ? '开启（预检全过才发送）' : '关闭（跳过预检直接发送）'}`);
+  }
+  return publishSettings();
+}
+
+/** @deprecated 兼容旧前端：enabled 语义映射到「自动发送」 */
+export function isSchedulerEnabled() { return isAutoSendEnabled(); }
+export function setSchedulerEnabled(enabled) { return setPublishSettings({ autoSend: !!enabled }).autoSend; }
+
+// 给前端读的真实状态（前端不允许再写死）
 export function schedulerState() {
-  const row = db.prepare("SELECT COUNT(*) AS n FROM publish_tasks WHERE status='pending'").get();
+  const pending = db.prepare("SELECT COUNT(*) AS n FROM publish_tasks WHERE status='pending'").get();
+  const awaiting = db.prepare("SELECT COUNT(*) AS n FROM publish_tasks WHERE status='awaiting_confirm'").get();
   return {
-    enabled: isSchedulerEnabled(),
+    enabled: isAutoSendEnabled(),   // 兼容旧字段：等价于「自动发送」
+    autoSend: isAutoSendEnabled(),
+    protect: isProtectEnabled(),
     intervalSec: 60,
     preMinutes: PRE_MINUTES,
     lastTickAt,
-    pending: row ? row.n : 0,
+    pending: pending ? pending.n : 0,
+    awaitingConfirm: awaiting ? awaiting.n : 0,
   };
 }
 
@@ -295,17 +387,27 @@ export async function tick() {
   if (ticking) return;
   ticking = true;
   try {
-    if (!isSchedulerEnabled()) return;   // 暂停中：不扫描、不发布
     lastTickAt = now();
-    const tasks = db.prepare("SELECT * FROM publish_tasks WHERE status='pending' ORDER BY scheduled_at ASC LIMIT 10").all();
+    const autoSend = isAutoSendEnabled();
+    const protect = isProtectEnabled();
+    const tasks = db.prepare("SELECT * FROM publish_tasks WHERE status IN ('pending','awaiting_confirm') ORDER BY scheduled_at ASC LIMIT 10").all();
     for (const t of tasks) {
       const when = parseWhen(t.scheduled_at);
       if (!when) continue;
       const mins = (when.getTime() - Date.now()) / 60000;
-      // 到期（含超过 15 分钟）→ 发布；否则只做预检记录
       if (mins <= 0) {
+        // 到点：自动发送开 → 直接发；关 → 转「待确认」等人工（开关重新打开后自动补发）
+        if (!autoSend) {
+          if (t.status === 'pending') {
+            db.prepare("UPDATE publish_tasks SET status='awaiting_confirm', updated_at=? WHERE id=?").run(now(), t.id);
+            log('info', 'publish', `到点转「待确认」 #${t.id}（自动发送已关闭）`);
+          }
+          continue;
+        }
         await runTask(t.id);
       } else if (mins <= PRE_MINUTES && t.status === 'pending') {
+        // 提前 15 分钟预检（发布保护关闭时跳过）
+        if (!protect) continue;
         const pc = await precheck(t.content_id);
         if (!pc.pass) {
           const bad = pc.items.filter((i) => !i.ok).map((i) => `${i.name}: ${i.detail}`).join('；');
@@ -315,6 +417,8 @@ export async function tick() {
         }
       }
     }
+    // R19：7 天未排期草稿自动清理（挂进现有调度：每轮扫描顺带执行）
+    try { purgeExpiredDrafts(); } catch (e) { log('error', 'generate', '7 天清理异常: ' + e.message); }
   } catch (e) {
     log('error', 'publish', '调度器异常: ' + e.message);
   } finally {
@@ -324,5 +428,5 @@ export async function tick() {
 
 export function startScheduler() {
   setInterval(() => { tick().catch(() => {}); }, 60 * 1000);
-  log('info', 'publish', `发布调度器已启动（每 60 秒扫描，当前${isSchedulerEnabled() ? '开启' : '暂停'}）`);
+  log('info', 'publish', `发布调度器已启动（每 60 秒扫描；自动发送${isAutoSendEnabled() ? '开' : '关'}，发布保护${isProtectEnabled() ? '开' : '关'}）`);
 }

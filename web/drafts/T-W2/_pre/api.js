@@ -73,6 +73,11 @@ export const api = {
   addTakeover: (p) => req('/takeover', { method: 'POST', body: p }),
   removeTakeover: (userId) => req(`/takeover/${userId}`, { method: 'DELETE' }),
 
+  // 手工填报（R13）
+  manualMetrics: (days) => req(`/manual-metrics?days=${days || 30}`),
+  saveManualMetrics: (p) => req('/manual-metrics', { method: 'POST', body: p }),
+  deleteManualMetrics: (date) => req(`/manual-metrics/${date}`, { method: 'DELETE' }),
+
   // 复盘报告（R12）
   report: () => req('/report?days=30'),
   buildReport: (p) => req('/report', { method: 'POST', body: p || {} }),
@@ -124,10 +129,6 @@ export const api = {
 
   // 数据洞察
   myNotes: () => req('/mcp/my-notes'),
-  // 数据洞察 · 逐篇笔记数据（R21 契约3；缺的字段为 null 并出现在 missing，不用 0 冒充）
-  performance: (limit = 30) => req(`/notes/performance?limit=${limit}`),
-  // 数据洞察 · AI 整体解读 + 高潜方向（R21 契约2；无 Key/样本不足时返回 ok:false + reason）
-  insight: () => req('/analytics/insight'),
 
   // 互动动态（R18 互动运营区，契约1）：{ replies:[…我们回复了谁…], incoming:[…用户留言…] }
   interactionFeed: (limit = 40) => req(`/interaction/feed?limit=${limit}`),
