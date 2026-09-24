@@ -25,9 +25,30 @@ function loadEnvFile() {
 }
 
 const ENV = { ...loadEnvFile(), ...process.env };
-const KEY = ENV.DEEPSEEK_API_KEY || '';
-const BASE = (ENV.DEEPSEEK_BASE || 'https://api.deepseek.com').replace(/\/+$/, '');
-const MODEL = ENV.DEEPSEEK_MODEL || 'deepseek-chat';
+let KEY = ENV.DEEPSEEK_API_KEY || '';
+let BASE = (ENV.DEEPSEEK_BASE || 'https://api.deepseek.com').replace(/\/+$/, '');
+let MODEL = ENV.DEEPSEEK_MODEL || 'deepseek-chat';
+/* ---- 界面手动填 Key 后热更新（免得客户为了换 Key 重启服务） ---- */
+function readEnvFileNow() {
+  const out = {};
+  try {
+    const t = require('node:fs').readFileSync(new URL('../.env', import.meta.url), 'utf8');
+    for (const line of t.split('\n')) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+  } catch { /* 无 .env */ }
+  return out;
+}
+
+export function reloadKeys() {
+  const e = { ...ENV, ...readEnvFileNow(), ...process.env };
+  KEY = e.DEEPSEEK_API_KEY || '';
+  BASE = (e.DEEPSEEK_BASE || 'https://api.deepseek.com').replace(/\/+$/, '');
+  MODEL = e.DEEPSEEK_MODEL || 'deepseek-chat';
+  return deepseekInfo();
+}
+
 
 export function deepseekReady() {
   return !!KEY;

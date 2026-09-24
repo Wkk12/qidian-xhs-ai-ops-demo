@@ -176,11 +176,13 @@ ${trendText}
 
 【任务】
 生成 ${days} 天 × 每天 ${postsPerDay} 条 = **共 ${total} 条**小红书笔记。
+**选题来源优先级**：若上面【完整运营策略】给了「分阶段选题」，就**按它的顺序逐条写**（一天一条往前推），不要另起炉灶；策略没给选题时才用下面的七天叙事。
 叙事结构（每天都必须承接前一天的结论，并给下一天留钩子）：
 ${dayPlan}
 
 【硬性要求】
 1. 每条标题 ≤ 20 字，要有钩子（疑问式/数字式/结果前置式），口语化，不写广告腔
+1.5 **小红书原生感（硬要求）**：正文大量使用 emoji（每条 6–15 个，放在要点前或句末，如 👇✅😭🥹💄✨），短句分行（每段 1–3 行），可用 1–2 个颜文字；标题可带 1 个 emoji。禁止写成说明书或广告稿
 2. 正文 150–400 字，分段短句，每段不超过 3 行，可用 emoji 但不堆砌
 3. 至少 3 个话题标签
 4. 每条标注它属于哪个「内容支柱」，并说明为什么这么写（1 句话）
@@ -209,7 +211,21 @@ const DUP_THRESHOLD = 0.6;
 const MAX_REWRITE = 3;
 
 /** 对单条内容做查重；不过则让模型换角度重写 */
+function dedupeRewriteEnabled() {
+  try {
+    const r = db.prepare("SELECT value FROM settings WHERE key='dedupe_rewrite'").get();
+    return !r || (r.value !== 'false' && r.value !== '0');
+  } catch { return true; }
+}
+
 async function enforceDedupe(item, context, keyword = '') {
+  // 「内容与发布保护 · 相似度超限自动重写」开关关掉时：只保留分数，不触发重写
+  if (!dedupeRewriteEnabled()) {
+    try {
+      const d = checkDuplicate(item.title, item.body, []);
+      return { ...item, dup_score: d.score, dup_with: d.mostSimilar ? d.mostSimilar.title : null, dupSkipped: true };
+    } catch { return item; }
+  }
   let cur = { title: item.title, body: item.body };
   let last = null;
   for (let attempt = 0; attempt <= MAX_REWRITE; attempt++) {

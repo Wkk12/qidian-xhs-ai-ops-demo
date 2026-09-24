@@ -50,11 +50,25 @@ export function setReplyEnabled(v) {
 }
 
 /** 人设卡（默认给一套美妆/设计接单场景的） */
+/**
+ * 人设卡 = **评论回复的人设**（只影响自动回复怎么说话），不是账号人设。
+ * 账号人设（我是谁/给谁看/核心要求）在「运营大纲 · 三板块」里；
+ * 这里没单独设置时，**默认继承运营大纲**，避免两处各说各话。
+ */
 export function getPersona() {
-  return getSetting('persona_card', {
-    name: '绮点',
-    role: '美业/设计内容账号主理人',
-    tone: '温柔、专业、像朋友',
+  const saved = getSetting('persona_card', null);
+  if (saved && (saved.name || saved.role || saved.tone)) return { ...saved, scope: 'comment-reply' };
+  let pos = {};
+  try {
+    const p = db.prepare('SELECT * FROM positioning ORDER BY id DESC LIMIT 1').get();
+    if (p) pos = p;
+  } catch { /* ignore */ }
+  return {
+    scope: 'comment-reply',
+    inheritedFrom: 'positioning',
+    name: pos.persona || '绮点',
+    role: pos.persona ? `${pos.persona}（面向 ${pos.audience || '目标人群'}）` : '美业/设计内容账号主理人',
+    tone: pos.tone || '温柔、专业、像朋友',
     addressForm: '哈喽～',
     taboo: ['不承诺疗效', '不报具体价格', '不贬低同行'],
     sampleReplies: [
@@ -62,16 +76,30 @@ export function getPersona() {
       '谢谢喜欢～具体可以私信我哈',
     ],
     enabled: true,
-  });
+  };
 }
 export function setPersona(p) { setSetting('persona_card', p); return { ok: true, persona: getPersona() }; }
 
 /** 禁用词表 */
+/**
+ * 禁用词表（默认给一套专业词表，客户可改可加）
+ * 口径：① 广告法绝对化用语 ② 医疗/医美违规表述 ③ 引流与私下交易 ④ 贬低同行
+ * 回复里一命中就转人工，绝不自动发出。
+ */
+export const DEFAULT_FORBIDDEN = [
+  // ① 广告法绝对化
+  '最好', '最佳', '第一', '唯一', '绝对', '顶级', '国家级', '世界级', '史上最', '全网最低',
+  '最便宜', '永久有效', '100%', '百分百', '无一例外', '保证', '包治', '无效退款',
+  // ② 医疗 / 医美违规
+  '治疗', '治愈', '根治', '药效', '特效', '无痛', '零风险', '立竿见影', '立马见效', '包瘦', '包过',
+  // ③ 引流 / 私下交易
+  '加微信', '私加', '私下转账', '扫码付款', '加v', '加V', '微信号', '免费送', '返现', '先到先得名额',
+  // ④ 贬低同行 / 违规承诺
+  '同行不行', '别家都是骗', '正规医院都不敢', '做完就变',
+];
+
 export function getForbidden() {
-  return getSetting('forbidden_words', [
-    '包治', '保证有效', '100%', '全网最低', '最便宜', '绝对', '治愈', '根治',
-    '免费送', '加微信', '私下转账', '同行不行', '别家都是骗',
-  ]);
+  return getSetting('forbidden_words', DEFAULT_FORBIDDEN);
 }
 export function setForbidden(list) { setSetting('forbidden_words', list); return { ok: true, words: getForbidden() }; }
 

@@ -279,6 +279,91 @@
 .match-result { margin-top: 10px; font-size: 11px; line-height: 1.8; }
 .match-result p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
 
+/* ============ 系统设置：账号/密钥/开关/知识库 ============ */
+.account-card .acc-line { margin: 10px 0 0; display: grid; gap: 4px; }
+.account-card .acc-line b { font-size: 14px; }
+.account-card .acc-line small { color: var(--muted); font-size: 10px; }
+.acc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 12px; }
+.conn-state { padding: 4px 9px; border-radius: 999px; font-size: 9px; font-weight: 700; }
+.conn-state.ok { color: var(--positive); background: var(--positive-soft); }
+.conn-state.bad { color: #b4544a; background: rgba(180, 84, 74, .1); }
+.qr-inline { margin-top: 14px; display: grid; gap: 8px; justify-items: center; }
+.qr-inline img { width: 168px; height: 168px; object-fit: contain; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.qr-inline .qr-empty { width: 168px; height: 168px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 10px; text-align: center; padding: 8px; }
+.qr-inline small { color: var(--muted); font-size: 9px; text-align: center; }
+.key-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.setting-panel .studio-field { margin-top: 10px; }
+.setting-panel .studio-field input, .setting-panel .studio-field select { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--panel); font-size: 11.5px; font-family: inherit; }
+.key-result { font-size: 10px; }
+.key-result.ok { color: var(--positive); }
+.key-result.bad { color: #b4544a; }
+.tier-table { margin-top: 12px; padding: 11px 13px; display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-two); }
+.tier-table b { font-size: 11px; }
+.tier-table span { font-size: 10.5px; }
+.tier-table small { color: var(--muted); font-size: 9px; }
+.tier-note { color: #b4544a; line-height: 1.6; }
+.shot-result { margin-top: 12px; display: grid; gap: 6px; }
+.shot-result img { width: 100%; max-width: 220px; border-radius: 11px; border: 1px solid var(--border); }
+.shot-result small { color: var(--muted); font-size: 9px; }
+.forbidden-box { width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--panel); font-size: 11px; line-height: 1.7; font-family: inherit; }
+.kb-row { padding: 11px 0; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); }
+.kb-row b { font-size: 12px; }
+.kb-row button { padding: 0; border: 0; background: transparent; cursor: pointer; font-size: 10px; font-weight: 700; }
+.kb-src { margin-left: 8px; padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 8px; font-weight: 700; }
+.kb-ans { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.kb-kw { margin-top: 4px; color: var(--muted); font-size: 9px; }
+
+/* ============ 系统设置：账号/密钥/开关/知识库 ============ */
+.account-card .acc-line { margin: 10px 0 0; display: grid; gap: 4px; }
+.account-card .acc-line b { font-size: 14px; }
+.account-card .acc-line small { color: var(--muted); font-size: 10px; }
+.acc-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 12px; }
+.conn-state { padding: 4px 9px; border-radius: 999px; font-size: 9px; font-weight: 700; }
+.conn-state.ok { color: var(--positive); background: var(--positive-soft); }
+.conn-state.bad { color: #b4544a; background: rgba(180, 84, 74, .1); }
+.qr-inline { margin-top: 14px; display: grid; gap: 8px; justify-items: center; }
+.qr-inline img { width: 168px; height: 168px; object-fit: contain; border: 1px solid var(--border); border-radius: 12px; background: #fff; }
+.qr-inline .qr-empty { width: 168px; height: 168px; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 10px; text-align: center; padding: 8px; }
+.qr-inline small { color: var(--muted); font-size: 9px; text-align: center; }
+.key-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.setting-panel .studio-field { margin-top: 10px; }
+.setting-panel .studio-field input, .setting-panel .studio-field select { width: 100%; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--panel); font-size: 11.5px; font-family: inherit; }
+.key-result { font-size: 10px; }
+.key-result.ok { color: var(--positive); }
+.key-result.bad { color: #b4544a; }
+.tier-table { margin-top: 12px; padding: 11px 13px; display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel-two); }
+.tier-table b { font-size: 11px; }
+.tier-table span { font-size: 10.5px; }
+.tier-table small { color: var(--muted); font-size: 9px; }
+.tier-note { color: #b4544a; line-height: 1.6; }
+.shot-result { margin-top: 12px; display: grid; gap: 6px; }
+.shot-result img { width: 100%; max-width: 220px; border-radius: 11px; border: 1px solid var(--border); }
+.shot-result small { color: var(--muted); font-size: 9px; }
+.forbidden-box { width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--panel); font-size: 11px; line-height: 1.7; font-family: inherit; }
+.kb-row { padding: 11px 0; display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--border); }
+.kb-row b { font-size: 12px; }
+.kb-row button { padding: 0; border: 0; background: transparent; cursor: pointer; font-size: 10px; font-weight: 700; }
+.kb-src { margin-left: 8px; padding: 2px 7px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font-size: 8px; font-weight: 700; }
+.kb-ans { margin-top: 5px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.kb-kw { margin-top: 4px; color: var(--muted); font-size: 9px; }
+
+/* ============ R19 收口：池子封面 / 编辑器（左内容右手机） ============ */
+.draft-img { width: 100%; height: 100%; object-fit: cover; }
+.editor-card { width: min(1000px, 95vw); max-height: 90vh; overflow: auto; padding: 20px 22px; background: var(--panel); border-radius: 18px; }
+.editor-close { padding: 0 8px; border: 0; color: var(--ink); background: transparent; cursor: pointer; font-size: 22px; line-height: 1; }
+.editor-grid { margin-top: 14px; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(230px, .65fr); gap: 18px; align-items: start; }
+.editor-left { display: grid; gap: 12px; }
+.editor-left .studio-field textarea { line-height: 1.8; font-size: 12px; }
+.editor-imgs { padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-two); }
+.editor-imgs b { font-size: 11px; }
+.editor-img-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.editor-img-row img { width: 80px; height: 80px; object-fit: cover; border-radius: 10px; border: 1px solid var(--border); }
+.dup-box { padding: 11px 13px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-two); }
+.dup-box b { font-size: 11.5px; }
+.dup-box p { margin: 6px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.editor-right { display: grid; gap: 8px; justify-items: center; position: sticky; top: 0; }
+@media (max-width: 900px) { .editor-grid { grid-template-columns: 1fr; } .editor-right { justify-items: start; } }
+
 @media (prefers-reduced-motion: reduce) {
   .module-view, .generation-strip:not(.done) .generation-orb svg { animation: none; }
 }

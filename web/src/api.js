@@ -159,6 +159,23 @@ export const api = {
   // 评论
   comments: (status) => req(`/comments${status ? `?status=${status}` : ''}`),
 
+  // 密钥/渠道（客户机没有 Hermes → 界面手动填 + 当场检查）
+  keysStatus: () => req('/keys/status'),
+  saveKeys: (p) => req('/keys', { method: 'POST', body: p }),
+  testKeys: (target = 'all') => req('/keys/test', { method: 'POST', body: { target } }),
+  testShot: () => req('/image/test-shot', { method: 'POST' }),
+
+  // 内容与发布保护开关
+  guardSettings: () => req('/guard/settings'),
+  setGuardSettings: (p) => req('/guard/settings', { method: 'POST', body: p }),
+
+  // 知识库（两部分：文档提炼 + AI 对话补全）
+  knowledgeEntries: (source = '') => req(`/knowledge/entries${source ? `?source=${source}` : ''}`),
+  deleteKnowledgeEntry: (id) => req(`/knowledge/${id}`, { method: 'DELETE' }),
+  analyzeDoc: (id, max = 15) => req(`/library/${id}/analyze`, { method: 'POST', body: { max } }),
+  knowledgeChat: (limit = 40) => req(`/knowledge/chat?limit=${limit}`),
+  sendKnowledgeChat: (message) => req('/knowledge/chat', { method: 'POST', body: { message } }),
+
   // 设置（密钥只回掩码）
   settings: () => req('/settings'),
   saveSetting: (key, value) => req('/settings', { method: 'POST', body: { key, value } }),

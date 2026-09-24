@@ -16,11 +16,14 @@ import { registerInteractionApi } from './interaction.js';
 import { registerAnalyticsApi } from './analytics.js';
 import { registerOutlineApi, strategyText, getStrategy } from './outline.js';
 import { registerLibraryApi } from './library.js';
+import { registerKnowledgeApi } from './knowledge.js';
+import { registerKeysApi } from './keys.js';
+import { reloadKeys as reloadDeepseekKeys, chat as deepseekChatOnce } from './deepseek.js';
 import { isReplyEnabled, setReplyEnabled } from './comments.js';
 import { generateWeek, runGeneration, getPositioning, getGoodPosts, getTrends, platformText, refreshPlatformRef } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
 import { collectSnapshots, buildReport } from './report.js';
-import { generateImage, expandPrompt, imagegenReady, TIERS } from './imagegen.js';
+import { generateImage, expandPrompt, imagegenReady, TIERS, reloadKeys as reloadImageKeys, testImageChannel, testShot } from './imagegen.js';
 import {
   getPersona, setPersona, getForbidden, setForbidden, pollOnce, startPoller,
   listComments, approveComment, manualReply, statsComments,
@@ -46,6 +49,18 @@ await registerInteractionApi(app);
 await registerAnalyticsApi(app);
 await registerOutlineApi(app);
 await registerLibraryApi(app);
+await registerKnowledgeApi(app);
+await registerKeysApi(app, {
+    deepseekInfo,
+    reloadDeepseek: reloadDeepseekKeys,
+    chatOnce: (msgs, opt) => deepseekChatOnce(msgs, opt),
+    imageStatus: imagegenReady,
+    reloadImage: reloadImageKeys,
+    testImageChannel,
+  });
+
+  // 生图渠道「试出一张」：真出图（约 60–90 秒），证明端到端可用
+  app.post('/api/image/test-shot', async () => testShot());
 
 // 前端页面托管（构建产物 web/dist）→ 访问 http://127.0.0.1:8787 直接出页面，无需单独起前端
 const WEB_DIST = path.resolve(__dirname, '../../web/dist');
@@ -62,6 +77,40 @@ app.setErrorHandler((err, req, reply) => {
 });
 
 // ---------- 健康检查 ----------
+
+/* ---------- 「内容与发布保护」开关（原来是三个「未接入」死框） ---------- */
+function getSettingRow(key, dflt) {
+  try {
+    const r = db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    if (!r) return dflt;
+    try { return JSON.parse(r.value); } catch { return r.value; }
+  } catch { return dflt; }
+}
+function putSettingRow(key, value) {
+  db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`)
+    .run(key, JSON.stringify(value), now());
+  return value;
+}
+app.get('/api/guard/settings', async () => ({
+  ok: true,
+  dedupeRewrite: getSettingRow('dedupe_rewrite', true) !== false,   // 相似度超限自动重写
+  autoSend: getSettingRow('auto_send', '1') !== '0',                // 无人值守发布
+  protect: getSettingRow('publish_protect', '1') !== '0',           // 发布保护
+}));
+app.post('/api/guard/settings', async (req) => {
+  const b = req.body || {};
+  if (b.dedupeRewrite !== undefined) putSettingRow('dedupe_rewrite', !!b.dedupeRewrite);
+  if (b.autoSend !== undefined) putSettingRow('auto_send', b.autoSend ? '1' : '0');
+  if (b.protect !== undefined) putSettingRow('publish_protect', b.protect ? '1' : '0');
+  return {
+    ok: true,
+    dedupeRewrite: getSettingRow('dedupe_rewrite', true) !== false,
+    autoSend: getSettingRow('auto_send', '1') !== '0',
+    protect: getSettingRow('publish_protect', '1') !== '0',
+  };
+});
+
 app.get('/api/health', async () => ({
   ok: true,
   service: 'xhs-ops-server',
@@ -699,6 +748,18 @@ app.post('/api/generate', async (req) => {
     imageRatio: b.imageRatio || '1:1',
     imageLimit: Number(b.imageLimit) || 0,
   });
+  // 没显式给排期 → 用运营策略里的发布时间表（post_time）给一个建议
+  if (!b.dryRun && !b.schedule) {
+    try {
+      const st = getStrategy();
+      const hhmm = (st && st.postTime) || '';
+      if (hhmm) {
+        const d = new Date(); d.setDate(d.getDate() + 1);
+        const p = (n) => String(n).padStart(2, '0');
+        gen.suggestedSchedule = { startDate: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: hhmm, fromStrategy: true };
+      }
+    } catch { /* ignore */ }
+  }
   if (!b.dryRun && b.schedule && Array.isArray(gen.items) && gen.items.length) {
     gen.scheduled = scheduleBatch(gen.items, { startDate: b.schedule.startDate, time: b.schedule.time });
     gen.scheduledOk = gen.scheduled.filter((x) => x.ok).length;

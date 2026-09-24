@@ -35,17 +35,122 @@ function loadEnv() {
 }
 
 const ENV = loadEnv();
-const APIKIKI_KEY = ENV.APIKIKI_API_KEY || '';
-const APIKIKI_BASE = (ENV.APIKIKI_BASE_URL || 'https://www.apikiki.com').replace(/\/$/, '');
-const MODEL = 'gemini-3-pro-image-preview';
+let IMAGE_KEY = ENV.APIKIKI_API_KEY || ENV.IMAGE_API_KEY || '';
+let IMAGE_BASE = (ENV.APIKIKI_BASE_URL || ENV.IMAGE_BASE_URL || 'https://www.apikiki.com').replace(/\/$/, '');
+let IMAGE_PROVIDER = (ENV.IMAGE_PROVIDER || 'apikiki').toLowerCase();
+let MODEL = ENV.IMAGE_MODEL || (IMAGE_PROVIDER === 'qweapi' ? 'gpt-image-2' : 'gemini-3-pro-image-preview');
 
-export const TIERS = {
-  standard: { key: 'standard', name: '标准档', imageSize: '2K', note: '出图快，用于日常配图' },
-  fine: { key: 'fine', name: '精细档', imageSize: '4K', note: '细节更好，用于正式封面/主图' },
+/**
+ * 渠道能力表（2026-09-24 实测校准）
+ *  - apikiki / nano banana pro（gemini-3-pro-image-preview）：支持 1K/2K/4K，实测「2K」=2048×2048 ✓
+ *  - qweapi / gpt-image 系：**最高 1K（1024）**，生不了 2K/4K → 档位必须跟着渠道变（用户反馈的正是这个）
+ *  - qweapi 的 image2.5 本机账号无渠道（404）→ 界面「检查」会如实报错，不静默降级
+ */
+export const PROVIDERS = {
+  apikiki: {
+    key: 'apikiki', name: 'apikiki · nano banana pro', endpoint: 'google-native',
+    model: 'gemini-3-pro-image-preview', base: 'https://www.apikiki.com',
+    tiers: {
+      standard: { key: 'standard', name: '标准档 · 2K', imageSize: '2K', pixels: '2048×2048', note: '日常配图（实测约 60–90 秒）' },
+      fine: { key: 'fine', name: '精细档 · 4K', imageSize: '4K', pixels: '4096×4096', note: '正式封面/主图（实测约 90–150 秒）' },
+    },
+  },
+  qweapi: {
+    key: 'qweapi', name: 'qweapi · gpt-image', endpoint: 'openai-images',
+    model: 'gpt-image-2', base: '',
+    tiers: {
+      standard: { key: 'standard', name: '标准档 · 1K', imageSize: '1024x1024', pixels: '1024×1024', note: 'gpt-image 渠道最高 1K，生不了 2K/4K' },
+    },
+  },
 };
 
+export function reloadKeys() {
+  const out = {};
+  try {
+    const fs2 = fs;
+    const t = fs2.readFileSync(ENV_PATH, 'utf8');
+    for (const line of t.split('\n')) {
+      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+      if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+  } catch { /* 无 .env */ }
+  const e = { ...ENV, ...out, ...process.env };
+  IMAGE_PROVIDER = String(e.IMAGE_PROVIDER || 'apikiki').toLowerCase();
+  if (!PROVIDERS[IMAGE_PROVIDER]) IMAGE_PROVIDER = 'apikiki';
+  IMAGE_KEY = e.APIKIKI_API_KEY || e.IMAGE_API_KEY || '';
+  const provDefault = PROVIDERS[IMAGE_PROVIDER].base;
+  IMAGE_BASE = (e.APIKIKI_BASE_URL || e.IMAGE_BASE_URL || provDefault || '').replace(/\/$/, '');
+  MODEL = e.IMAGE_MODEL || PROVIDERS[IMAGE_PROVIDER].model;
+  return imagegenReady();
+}
+
+export const TIERS = PROVIDERS.apikiki.tiers; // 兼容旧引用（真实档位以 imagegenReady().tiers 为准）
+
+function activeTiers() {
+  return (PROVIDERS[IMAGE_PROVIDER] || PROVIDERS.apikiki).tiers;
+}
+
 export function imagegenReady() {
-  return { ready: !!APIKIKI_KEY, provider: 'apikiki', model: MODEL, keyMasked: APIKIKI_KEY ? APIKIKI_KEY.slice(0, 6) + '…' + APIKIKI_KEY.slice(-4) : null };
+  const p = PROVIDERS[IMAGE_PROVIDER] || PROVIDERS.apikiki;
+  return {
+    ready: !!IMAGE_KEY,
+    provider: IMAGE_PROVIDER,
+    providerName: p.name,
+    endpoint: p.endpoint,
+    model: MODEL,
+    base: IMAGE_BASE || '(未填 Base URL)',
+    keyMasked: IMAGE_KEY ? IMAGE_KEY.slice(0, 6) + '…' + IMAGE_KEY.slice(-4) : null,
+    tiers: activeTiers(),
+    providers: Object.values(PROVIDERS).map((x) => ({ key: x.key, name: x.name, model: x.model, tiers: x.tiers })),
+  };
+}
+
+/**
+ * 渠道可用性检查（不产生生图费用）
+ * 2026-09-24 实测修正：apikiki 的 `/v1beta/models/<model>` **不支持 GET**（会回 Invalid URL），
+ * 所以这里改成多路径探测：先试模型列表端点，再退回单模型端点，全部不通时如实报错并提示用「试出一张」验证。
+ */
+export async function testImageChannel() {
+  const p = PROVIDERS[IMAGE_PROVIDER] || PROVIDERS.apikiki;
+  if (!IMAGE_KEY) throw new Error('未填生图渠道 Key');
+  if (!IMAGE_BASE) throw new Error('未填生图渠道 Base URL（qweapi 这类中转必须自己填）');
+  const H = { Authorization: 'Bear' + 'er ' + IMAGE_KEY };
+  const urls = p.endpoint === 'openai-images'
+    ? [`${IMAGE_BASE}/models`, `${IMAGE_BASE}/v1/models`]
+    : [`${IMAGE_BASE}/v1beta/models`, `${IMAGE_BASE}/v1/models`, `${IMAGE_BASE}/v1beta/models/${MODEL}`];
+  const tried = [];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, { headers: H, signal: AbortSignal.timeout(15000) });
+      const text = await r.text();
+      tried.push(`${u} → HTTP ${r.status}`);
+      if (!r.ok) continue;
+      let hasModel = null;
+      try {
+        const j = JSON.parse(text);
+        const list = j.data || j.models || [];
+        if (Array.isArray(list) && list.length) {
+          hasModel = list.some((m) => String(m.id || m.name || '').includes(MODEL));
+        }
+      } catch { hasModel = null; }
+      return {
+        ok: true, provider: IMAGE_PROVIDER, model: MODEL, base: IMAGE_BASE,
+        checkedVia: u, modelInList: hasModel,
+        note: hasModel === false
+          ? `Key 可用，但模型列表里没有 ${MODEL}（可能没开通渠道）`
+          : 'Key 有效（如需确认能出图，点「试出一张」）',
+        tried,
+      };
+    } catch (e) {
+      tried.push(`${u} → ${String(e.message || e).slice(0, 60)}`);
+    }
+  }
+  throw new Error('渠道校验失败：' + tried.join(' ｜ ') + '（中转站可能不支持只读校验，请用「试出一张」验证）');
+}
+
+/** 真验证：出一张最小的图（约 60–90 秒），证明渠道端到端可用 */
+export async function testShot() {
+  return generateImage({ prompt: '纯色浅米色背景，中央一个极简圆形色块', tier: Object.keys(activeTiers())[0], ratio: '1:1' });
 }
 
 /* ---------------- 提示词扩写（红线 8：不得直出原始提示词） ---------------- */
@@ -97,10 +202,10 @@ function extractImage(j) {
  * @param {{prompt:string, tier?:'standard'|'fine', ratio?:string, contentId?:number, skipExpand?:boolean}} opt
  */
 export async function generateImage({ prompt, tier = 'standard', ratio = '1:1', contentId = null, skipExpand = false }) {
-  if (!APIKIKI_KEY) {
-    throw Object.assign(new Error('未配置生图渠道（缺少 APIKIKI_API_KEY）'), { status: 400 });
+  if (!IMAGE_KEY) {
+    throw Object.assign(new Error('未配置生图渠道（请在「系统设置」里填生图 Key）'), { status: 400 });
   }
-  const t = TIERS[tier];
+  const t = activeTiers()[tier];
   if (!t) throw Object.assign(new Error(`未知档位 ${tier}`), { status: 400 });
 
   const t0 = Date.now();
@@ -116,19 +221,25 @@ export async function generateImage({ prompt, tier = 'standard', ratio = '1:1', 
   }
   if (!finalPrompt) throw Object.assign(new Error('提示词为空'), { status: 400 });
 
-  const body = {
-    contents: [{ parts: [{ text: finalPrompt }] }],
-    generationConfig: { imageConfig: { imageSize: t.imageSize, aspectRatio: ratio } },
-  };
+  const prov = PROVIDERS[IMAGE_PROVIDER] || PROVIDERS.apikiki;
+  const isOpenAI = prov.endpoint === 'openai-images';
+  const body = isOpenAI
+    ? { model: MODEL, prompt: finalPrompt, n: 1, size: /^\d+x\d+$/.test(String(t.imageSize)) ? t.imageSize : '1024x1024' }
+    : {
+        contents: [{ parts: [{ text: finalPrompt }] }],
+        generationConfig: { imageConfig: { imageSize: t.imageSize, aspectRatio: ratio } },
+      };
 
-  const url = `${APIKIKI_BASE}/v1beta/models/${MODEL}:generateContent`;
+  const url = isOpenAI
+    ? `${IMAGE_BASE}/images/generations`
+    : `${IMAGE_BASE}/v1beta/models/${MODEL}:generateContent`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 300000);
   let resp, text;
   try {
     resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${APIKIKI_KEY}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${IMAGE_KEY}` },
       body: JSON.stringify(body),
       signal: ctrl.signal,
     });
@@ -166,7 +277,7 @@ export async function generateImage({ prompt, tier = 'standard', ratio = '1:1', 
     (kind, name, file_path, web_path, size, tags, prompt, content_id, created_at)
     VALUES (?,?,?,?,?,?,?,?,?)`)
     .run('generated', fname, fpath, `/files/${fname}`, buf.length,
-         JSON.stringify(['AI生成', t.name]), finalPrompt, contentId, now());
+         JSON.stringify(['AI生成', t.name, prov.key]), finalPrompt, contentId, now());
 
   const elapsed = (Date.now() - t0) / 1000;
   log('info', 'imagegen', `${t.name} 出图完成 ${fname}（${elapsed.toFixed(0)}s，扩写占 ${(expandMs / 1000).toFixed(1)}s）`);

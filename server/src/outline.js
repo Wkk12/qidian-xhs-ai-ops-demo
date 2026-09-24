@@ -16,6 +16,7 @@ function ensureTables() {
       how_to      TEXT,            -- 我们应该怎么做
       goals       TEXT,            -- 多长时间达到什么目标
       phases      TEXT,            -- 分阶段策略（JSON：[{name,goal,topics:[]}]）
+      post_time   TEXT,            -- 发布时间表（如 19:30）：生成后自动排期就按它
       source      TEXT,            -- ai | manual | chat
       updated_at  TEXT
     );
@@ -27,6 +28,7 @@ function ensureTables() {
       created_at  TEXT
     );
   `);
+  try { db.exec('ALTER TABLE strategy ADD COLUMN post_time TEXT'); } catch { /* 列已存在 */ }
 }
 
 function safeParse(s, def) {
@@ -36,11 +38,12 @@ function safeParse(s, def) {
 export function getStrategy() {
   ensureTables();
   const row = db.prepare('SELECT * FROM strategy ORDER BY id DESC LIMIT 1').get();
-  if (!row) return { howTo: '', goals: '', phases: [], source: '', updatedAt: null, exists: false };
+  if (!row) return { howTo: '', goals: '', phases: [], postTime: '', source: '', updatedAt: null, exists: false };
   const phases = safeParse(row.phases, []);
   return {
     howTo: row.how_to || '',
     goals: row.goals || '',
+    postTime: row.post_time || '',
     phases: Array.isArray(phases) ? phases : [],
     source: row.source || '',
     updatedAt: row.updated_at || null,
@@ -56,14 +59,15 @@ export function saveStrategy(patch = {}, source = 'manual') {
     howTo: patch.howTo !== undefined ? String(patch.howTo || '') : cur.howTo,
     goals: patch.goals !== undefined ? String(patch.goals || '') : cur.goals,
     phases: patch.phases !== undefined ? (Array.isArray(patch.phases) ? patch.phases : cur.phases) : cur.phases,
+    postTime: patch.postTime !== undefined ? String(patch.postTime || '') : (cur.postTime || ''),
   };
   const row = db.prepare('SELECT id FROM strategy ORDER BY id DESC LIMIT 1').get();
   if (row) {
-    db.prepare('UPDATE strategy SET how_to=?, goals=?, phases=?, source=?, updated_at=? WHERE id=?')
-      .run(next.howTo, next.goals, JSON.stringify(next.phases), source, now(), row.id);
+    db.prepare('UPDATE strategy SET how_to=?, goals=?, phases=?, post_time=?, source=?, updated_at=? WHERE id=?')
+      .run(next.howTo, next.goals, JSON.stringify(next.phases), next.postTime, source, now(), row.id);
   } else {
-    db.prepare('INSERT INTO strategy (how_to, goals, phases, source, updated_at) VALUES (?,?,?,?,?)')
-      .run(next.howTo, next.goals, JSON.stringify(next.phases), source, now());
+    db.prepare('INSERT INTO strategy (how_to, goals, phases, post_time, source, updated_at) VALUES (?,?,?,?,?,?)')
+      .run(next.howTo, next.goals, JSON.stringify(next.phases), next.postTime, source, now());
   }
   const changed = [];
   if (patch.howTo !== undefined && String(patch.howTo || '') !== cur.howTo) changed.push('howTo');
@@ -79,6 +83,7 @@ export function strategyText() {
   const lines = [];
   if (s.howTo) lines.push('【我们应该怎么做】\n' + s.howTo);
   if (s.goals) lines.push('【多长时间达到什么目标】\n' + s.goals);
+  if (s.postTime) lines.push('【发布时间】每天 ' + s.postTime + ' 发布');
   if (s.phases.length) {
     lines.push('【分阶段策略】\n' + s.phases.map((p, i) => {
       const topics = Array.isArray(p.topics) && p.topics.length ? `\n    选题：${p.topics.join('、')}` : '';
@@ -94,25 +99,44 @@ export async function draftStrategy({ userIntent = '' } = {}) {
   if (!deepseekReady()) throw Object.assign(new Error('未配置 DeepSeek API Key'), { status: 400 });
   const p = getPositioning() || {};
   const pillars = Array.isArray(p.pillars) ? p.pillars.map((x) => `${x.name}(${x.ratio}%)`).join('、') : '—';
-  const sys = `你是小红书账号增长顾问。给一个美业/化妆培训类账号写一份**完整可执行**的运营策略。
+  // 真实数据（平台 30 天 + 本机已发标题）——策略必须贴着它写，不许写通用套话
+  let plat = '';
+  try {
+    const rr = await fetch('http://127.0.0.1:8787/api/creator/overview', { signal: AbortSignal.timeout(15000) }).then((x) => x.json());
+    const w = (rr && (rr.thirty || rr.seven)) || null;
+    if (w && w.summary) plat = '平台近 30 天真实数据：' + w.summary.map((x) => `${x.label} ${x.total}`).join('、');
+  } catch { /* 拿不到就不硬编 */ }
+  let localTitles = '';
+  try {
+    const rows = db.prepare('SELECT title FROM contents WHERE title IS NOT NULL ORDER BY id DESC LIMIT 30').all();
+    localTitles = rows.length ? '本机已有内容标题（选题不要重复这些角度）：' + rows.map((x) => x.title).join('；') : '';
+  } catch { /* ignore */ }
+
+  const sys = `你是小红书账号增长顾问。给一个美业/化妆培训类账号写一份**贴合账号真实数据、能直接落地**的运营策略。
 只输出 JSON，不要多余文字，结构：
 {"how_to":"我们应该怎么做（3-6 条，分点写，每点一行，讲清内容形态/发布节奏/互动方式/转化动作）",
  "goals":"多长时间达到什么目标（用阶段时间+可量化指标，例如 30 天：涨粉 300、单篇收藏率 3%）",
  "phases":[{"name":"第一阶段（第1-2周）","goal":"阶段目标","topics":["选题1","选题2","选题3"]}]}
-phases 给 3 个阶段，每阶段 3-5 个具体选题（中文、可直接当笔记标题）。`;
+phases 给 3 个阶段，每阶段 3-5 个具体选题（中文、可直接当笔记标题）。
+"how_to" 必须能直接执行（内容形态 / 每天几条 / 怎么互动 / 怎么转化），禁止"提升影响力"这类空话。
+"post_time" 给一个具体发布时间（HH:MM，按目标人群刷小红书高峰）。
+若真实数据很差（浏览量极低等），策略要**正视现状**：先解决什么、预期多少，不要吹大目标。
+只输出 JSON：{"how_to":"…","goals":"…","post_time":"19:30","phases":[{"name":"","goal":"","topics":[]}]}`;
   const usr = `账号三板块信息：
 - 人物设定：${p.persona || '—'}｜语气：${p.tone || '—'}
 - 目标人群：${p.audience || '—'}
 - 核心要求：卖点 ${p.selling || '—'}｜转化目标 ${p.goal || '—'}
 - 内容支柱占比：${pillars}
-${userIntent ? `用户补充要求：${userIntent}` : ''}`;
+${userIntent ? `用户补充要求：${userIntent}` : ''}
+${plat ? '\n' + plat : ''}
+${localTitles ? '\n' + localTitles : ''}`;
   const r = await chat([{ role: 'system', content: sys }, { role: 'user', content: usr }], { json: true });
   const j = parseJson(r.content) || {};
   const phases = Array.isArray(j.phases) ? j.phases.map((x) => ({
     name: String(x.name || ''), goal: String(x.goal || ''),
     topics: Array.isArray(x.topics) ? x.topics.map(String) : [],
   })) : [];
-  const saved = saveStrategy({ howTo: j.how_to || '', goals: j.goals || '', phases }, 'ai');
+  const saved = saveStrategy({ howTo: j.how_to || '', goals: j.goals || '', phases, postTime: j.post_time || '' }, 'ai');
   log('info', 'outline', `AI 策略初稿已生成（phases ${phases.length}）`);
   return { ok: true, strategy: saved.strategy, usage: r.usage || null };
 }
@@ -167,6 +191,7 @@ ${strategyText()}
     const norm = {};
     if (patch.how_to !== undefined) norm.howTo = String(patch.how_to || '');
     if (patch.goals !== undefined) norm.goals = String(patch.goals || '');
+    if (patch.post_time !== undefined) norm.postTime = String(patch.post_time || '');
     if (Array.isArray(patch.phases)) {
       norm.phases = patch.phases.map((x) => ({
         name: String(x.name || ''), goal: String(x.goal || ''),
@@ -227,7 +252,7 @@ export async function registerOutlineApi(app) {
   // 完整策略：保存 / 读取
   app.post('/api/outline/strategy', async (req) => {
     const b = req.body || {};
-    const r = saveStrategy({ howTo: b.howTo, goals: b.goals, phases: b.phases }, 'manual');
+    const r = saveStrategy({ howTo: b.howTo, goals: b.goals, phases: b.phases, postTime: b.postTime }, 'manual');
     return { ok: true, ...r };
   });
 
