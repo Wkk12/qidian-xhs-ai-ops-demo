@@ -6,8 +6,9 @@
 #   —— 推远端是写操作，没凭据就推不了。这不是脚本问题，是权限问题。
 #
 # 用法：
-#   GITHUB_TOKEN=github_pat_xxx bash scripts/push-to-wkk.sh                    # 推到 main
-#   GITHUB_TOKEN=github_pat_xxx bash scripts/push-to-wkk.sh <repo_url> <branch> # 指定仓库/分支
+#   GITHUB_TOKEN=github_pat_xxx bash scripts/push-to-wkk.sh                          # 推到 main
+#   GITHUB_TOKEN=github_pat_xxx bash scripts/push-to-wkk.sh <repo_url> <branch>      # 指定仓库/分支
+#   GITHUB_TOKEN=github_pat_xxx FORCE=1 bash scripts/push-to-wkk.sh                  # 强推覆盖远端分支（会删掉远端原有内容）
 #
 # token 需要的最小权限：Fine-grained PAT → Repository access 选目标仓库 → Permissions: Contents = Read and write
 # 安全：token 只在本次命令行使用，**不写 .git/config、不建 remote**；推完请把它删掉。
@@ -35,9 +36,16 @@ echo -n "  敏感文件是否入库: "
 git ls-files | grep -icE '\.env$|env-backup|cookie|\.db$|node_modules' | sed 's/^0$/0 ✓（无）/' || true
 echo "  文件数: $(git ls-files | wc -l)  提交数: $(git rev-list --all --count)"
 
+FORCE="${FORCE:-0}"
+FORCE_ARG=""
+if [ "$FORCE" = "1" ]; then
+  FORCE_ARG="--force"
+  echo "  ⚠️ 强推模式：远端 ${BRANCH} 分支原有内容会被本仓库历史覆盖"
+fi
+
 echo "== 推送 =="
 echo "  目标: $SLUG   分支: $BRANCH"
-if git push "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" 2>&1 | sed -E "s/${TOKEN}/***/g"; then
+if git push $FORCE_ARG "$PUSH_URL" "HEAD:refs/heads/${BRANCH}" 2>&1 | sed -E "s/${TOKEN}/***/g"; then
   echo "✅ 推送完成：https://github.com/${SLUG}/tree/${BRANCH}"
 else
   echo "❌ 推送被拒。常见原因与对策："
