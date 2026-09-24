@@ -26,6 +26,7 @@ import {
   Sparkles,
   TrendingUp,
   WandSparkles,
+  Repeat,
 } from '@lucide/vue'
 
 // 主导航驱动各业务演示页切换。
@@ -234,129 +235,17 @@ const trendTicks = computed(() => {
 const trendTotal = computed(() => trendSeries.value.reduce((a, p) => a + p.value, 0))
 const trendWindowLabel = computed(() => (trendSeries.value.length > 7 ? '近 30 天' : '近 7 天'))
 
-/* -------- 小红书扫码登录（客户机没有 Hermes，登录入口必须长在页面里） -------- */
-const loginOpen = ref(false)
-const loginState = ref({ service: true, loggedIn: false, username: '' })
-const qrImage = ref('')
-const qrLoading = ref(false)
-const qrError = ref('')
-const pollFails = ref(0) // 登录轮询连续失败计数（用于指数退避，避免打磨 MCP）
-const qrSecondsLeft = ref(0)
-const justLoggedIn = ref(false)
-let qrCountdown = null
-let loginPoll = null
+/* -------- 小红书扫码登录 / 切换账号：逻辑全在 account.js（设置页与左下角弹框共用同一套） -------- */
+import {
+  loginOpen, loginState, qrImage, qrLoading, qrError, qrSecondsLeft, justLoggedIn,
+  scanBusy, scanMsg, qrStatusText, refreshLoginStatus, fetchLoginQrcode, openLogin,
+  closeLogin, switchAccount, logoutAccount, setLoginSuccessHandler,
+} from './account.js'
 
-const qrStatusText = computed(() => {
-  if (qrLoading.value) return '正在获取二维码…'
-  if (qrError.value) return qrError.value
-  if (qrSecondsLeft.value > 0) return '等待扫码…'
-  return '二维码已过期，请点「换一张」'
+// 扫码成功后要刷新首页数据（账号变了，粉丝/笔记/互动都要重取）
+setLoginSuccessHandler(async () => {
+  await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries(), loadInteractionFeed()])
 })
-
-// 登录态每次都问本机服务，不缓存（客户可能换账号，也可能刚过期）
-async function refreshLoginStatus() {
-  try {
-    const s = await api.mcpStatus()
-    loginState.value = { service: !!s.service, loggedIn: !!s.loggedIn, username: s.username || '' }
-  } catch (e) {
-    loginState.value = { service: false, loggedIn: false, username: '' }
-  }
-  return loginState.value
-}
-
-function startQrCountdown(seconds) {
-  clearInterval(qrCountdown)
-  qrSecondsLeft.value = Math.max(30, Math.round(Number(seconds) || 240)) // MCP 二维码默认 4 分钟有效
-  qrCountdown = setInterval(() => {
-    qrSecondsLeft.value = Math.max(0, qrSecondsLeft.value - 1)
-    if (qrSecondsLeft.value === 0) clearInterval(qrCountdown)
-  }, 1000)
-}
-
-async function fetchLoginQrcode() {
-  qrLoading.value = true
-  qrError.value = ''
-  clearInterval(qrCountdown)
-  try {
-    const r = await api.mcpQrcode()
-    const d = (r && r.data) || {}
-    const img = String((d && d.img) || (typeof d === 'string' ? d : '') || '')
-    if (!img.startsWith('data:image')) throw new Error('二维码返回异常')
-    qrImage.value = img
-    justLoggedIn.value = false
-    // MCP 会回 timeout（毫秒），有就按它算倒计时，没有就按 4 分钟
-    const ttl = Number(d && d.timeout)
-    startQrCountdown(ttl > 1000 ? ttl / 1000 : (ttl > 0 ? ttl : 240))
-  } catch (e) {
-    qrImage.value = ''
-    qrError.value = loginState.value.service
-      ? '获取二维码失败：' + (e.message || '未知错误')
-      : '本机服务未启动，无法获取二维码'
-  } finally {
-    qrLoading.value = false
-  }
-}
-
-// 打开登录窗口：先问登录态 → 出二维码 → 每 3 秒轮询，扫码成功即刷新页面数据
-async function openLogin() {
-  loginOpen.value = true
-  justLoggedIn.value = false
-  qrLoading.value = true // 立刻进入「获取中」，避免先显示「二维码已过期」误导用户
-  // 两个请求并行（都走 MCP，各自要几秒）
-  await Promise.allSettled([refreshLoginStatus(), fetchLoginQrcode()])
-  // 轮询登录态（2026-09-21 重写）：
-  // 旧版固定 4 秒一次、不退避、切到后台还继续跑 —— 实测把 MCP 打磨到错误日志 33.8MB。
-  // 现策略：① 页面不可见时不轮询（切回来立刻补一次）
-  //        ② 服务异常时指数退避 4→8→16→32→60s
-  //        ③ 连续失败 10 次即彻底停止，留「换一张」按钮让用户主动重试
-  clearTimeout(loginPoll)
-  pollFails.value = 0
-  const poll = async () => {
-    if (document.hidden) {
-      loginPoll = setTimeout(poll, 3000)
-      return
-    }
-    const s = await refreshLoginStatus()
-    if (s.loggedIn) {
-      clearInterval(qrCountdown)
-      qrSecondsLeft.value = 0
-      qrImage.value = ''
-      justLoggedIn.value = true
-      await Promise.allSettled([loadAccount(), loadPlanAndPosts(), loadTrendSeries(), loadInteractionFeed()])
-      return
-    }
-    // 服务正常（只是没扫码）→ 保持 4 秒；服务异常 → 退避
-    if (s.service) pollFails.value = 0
-    else pollFails.value += 1
-
-    if (pollFails.value >= 10) {
-      qrError.value = '本机服务连接异常，已暂停自动刷新；修好后点上方「换一张」重新获取'
-      return
-    }
-    const delay = s.service ? 4000 : Math.min(60000, 4000 * Math.pow(2, Math.min(pollFails.value, 4)))
-    loginPoll = setTimeout(poll, delay)
-  }
-  loginPoll = setTimeout(poll, 4000)
-}
-
-// 页面从后台切回前台时，若登录弹窗还开着就立刻补问一次（不必等退避）
-function onVisibilityChange() {
-  if (!document.hidden && loginOpen.value && !loginState.value.loggedIn) {
-    clearTimeout(loginPoll)
-    loginPoll = setTimeout(() => { if (loginOpen.value) refreshLoginStatus() }, 300)
-  }
-}
-
-function closeLogin() {
-  loginOpen.value = false
-  clearTimeout(loginPoll)
-  clearInterval(qrCountdown)
-}
-
-onUnmounted(closeLogin)
-onMounted(refreshLoginStatus) // 首帧就把左下角登录态显示成真值
-onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
-onUnmounted(() => document.removeEventListener('visibilitychange', onVisibilityChange))
 
 
 // 账号 ID 脱敏：客户页不露明文 ID（长度 ≤8 原样；否则 前4****后4）
@@ -816,7 +705,7 @@ const phoneSimilarity = computed(() => {
               <span class="gate-icon"><Check :size="18" /></span>
               <div>
                 <small>当前登录账号</small>
-                <b>{{ loginState.loggedIn ? (loginState.username || '已登录') : (loginState.service ? '未登录' : '本机服务未启动') }}</b>
+                <b>{{ !loginState.service ? '本机服务未启动' : (loginState.unknown ? '正在读取登录态…' : (loginState.loggedIn ? (loginState.username || '已登录') : '未登录')) }}</b>
               </div>
               <span v-if="loginState.loggedIn" class="gate-pass"><Check :size="13" /> 授权正常</span>
               <span v-else class="gate-warn"><LockKeyhole :size="13" /> 待登录</span>
@@ -831,9 +720,16 @@ const phoneSimilarity = computed(() => {
               <div v-else class="login-qr-empty">{{ qrStatusText }}</div>
             </div>
             <p class="login-qr-hint"><Clock3 :size="13" /> {{ qrSecondsLeft > 0 ? `二维码 ${qrSecondsLeft} 秒后失效` : qrStatusText }}</p>
-            <button class="primary-button glass-button login-qr-btn" type="button" :disabled="qrLoading" @click="fetchLoginQrcode">
-              <RefreshCw :size="15" />{{ qrLoading ? '获取中…' : '换一张二维码' }}
-            </button>
+            <div class="login-action-row">
+              <button class="primary-button glass-button login-qr-btn" type="button" :disabled="qrLoading || scanBusy" @click="fetchLoginQrcode">
+                <RefreshCw :size="15" />{{ qrLoading ? '获取中…' : '换一张二维码' }}
+              </button>
+              <button class="glass-button login-qr-btn" type="button" :disabled="scanBusy" @click="switchAccount">
+                <Repeat :size="15" />{{ scanBusy ? '处理中…' : '切换账号（扫码）' }}
+              </button>
+              <button v-if="loginState.loggedIn" class="glass-button login-qr-btn" type="button" :disabled="scanBusy" @click="logoutAccount">退出登录</button>
+            </div>
+            <p v-if="scanMsg" class="login-ok">{{ scanMsg }}</p>
             <p class="login-qr-steps">打开【小红书 App】→ 左上角「扫一扫」→ 扫描后在手机上确认登录。</p>
           </section>
         </aside>

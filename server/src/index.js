@@ -198,6 +198,46 @@ app.post('/api/mcp/status/refresh', async () => {
   return { ok: true, cleared: true };
 });
 
+/**
+ * 切换账号：先清掉本机授权（退出原账号），再取一张新二维码 —— 扫码后即换号
+ * 说明：MCP 没有"账号列表"这种概念，换号的唯一可靠方式就是清 cookies 重新扫码。
+ */
+app.post('/api/mcp/switch-account', async () => {
+  const out = { ok: true, cleared: false };
+  try {
+    await mcp.clearCookies();
+    out.cleared = true;
+  } catch (e) {
+    out.cleared = false;
+    out.clearError = String(e.message || e).slice(0, 200);
+  }
+  _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };   // 登录态立刻重查
+  _meCache = { at: 0, data: null, inflight: null };                            // 账号资料立刻重查
+  try {
+    const r = await mcp.loginQrcode();
+    out.data = r?.data || null;
+  } catch (e) {
+    out.qrError = String(e.message || e).slice(0, 200);
+  }
+  log('info', 'mcp', '切换账号：已清授权=' + out.cleared + '，新二维码=' + (out.data ? '已获取' : '失败'));
+  return out;
+});
+
+/** 退出登录：只清授权，不出码 */
+app.post('/api/mcp/logout', async () => {
+  const out = { ok: true, cleared: false };
+  try {
+    await mcp.clearCookies();
+    out.cleared = true;
+  } catch (e) {
+    out.cleared = false;
+    out.error = String(e.message || e).slice(0, 200);
+  }
+  _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };
+  _meCache = { at: 0, data: null, inflight: null };
+  return out;
+});
+
 app.get('/api/mcp/qrcode', async () => {
   const r = await mcp.loginQrcode();
   return { ok: true, data: r?.data || null };

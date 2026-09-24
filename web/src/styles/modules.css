@@ -364,6 +364,31 @@
 .editor-right { display: grid; gap: 8px; justify-items: center; position: sticky; top: 0; }
 @media (max-width: 900px) { .editor-grid { grid-template-columns: 1fr; } .editor-right { justify-items: start; } }
 
+/* ============ 设置页卡片压矮 + 账号卡二维码右侧 ============ */
+.settings-grid { align-items: start; }
+.settings-grid .setting-panel { padding: 14px 16px; }
+.setting-panel .panel-head.compact { margin-bottom: 6px; }
+.setting-panel .panel-head.compact h3 { font-size: 13px; }
+.acc-body { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 14px; align-items: start; }
+.acc-info { display: grid; gap: 4px; align-content: start; }
+.acc-info b { font-size: 13px; }
+.acc-info small { color: var(--muted); font-size: 9.5px; line-height: 1.6; }
+.acc-msg { margin: 6px 0 0; color: var(--accent); font-size: 9.5px; line-height: 1.6; }
+.qr-side { display: grid; gap: 5px; justify-items: center; align-content: start; }
+.qr-side img { width: 124px; height: 124px; object-fit: contain; border: 1px solid var(--border); border-radius: 10px; background: #fff; }
+.qr-side .qr-empty { width: 124px; height: 124px; display: grid; place-items: center; padding: 8px; border: 1px dashed var(--border); border-radius: 10px; color: var(--muted); font-size: 9px; text-align: center; white-space: pre-line; line-height: 1.6; }
+.qr-side small { color: var(--muted); font-size: 8.5px; text-align: center; }
+.link-mini { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font-size: 9px; font-weight: 700; }
+.outline-button.slim { padding: 6px 11px; font-size: 10px; }
+.outline-button.danger { color: #b4544a; }
+.setting-panel .studio-field { margin-top: 7px; }
+.setting-panel .studio-field span { font-size: 9.5px; }
+.setting-panel .studio-field input, .setting-panel .studio-field select { padding: 7px 10px; font-size: 11px; }
+.setting-panel .acc-actions { margin-top: 9px; }
+.setting-panel .tier-table { margin-top: 9px; padding: 9px 11px; gap: 4px; }
+.setting-panel .environment-list { margin-top: 8px; }
+@media (max-width: 620px) { .acc-body { grid-template-columns: 1fr; } }
+
 @media (prefers-reduced-motion: reduce) {
   .module-view, .generation-strip:not(.done) .generation-orb svg { animation: none; }
 }

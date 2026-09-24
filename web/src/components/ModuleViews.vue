@@ -5,6 +5,10 @@ import { ElButton } from 'element-plus'
 import 'element-plus/es/components/button/style/css'
 import { api } from '../api.js'
 import {
+  loginState, qrImage, qrLoading, qrError, qrSecondsLeft, scanBusy, scanMsg,
+  refreshLoginStatus, fetchLoginQrcode, switchAccount, logoutAccount,
+} from '../account.js'
+import {
   ArrowRight,
   BarChart3,
   BookOpenCheck,
@@ -363,7 +367,7 @@ async function loadContents() {
 // 注意：ModuleViews 由 App.vue 的 v-else 挂载，首次进入某模块时组件刚挂载，
 // watch 默认不捕获初始值 → 必须 immediate:true，否则首次进入不加载数据。
 const onViewChange = (v) => {
-  if (v === 'settings') { loadRealStatus(); loadComments(); loadAccStatus(); loadKeys(); loadGuard(); loadLibraryDocs(); loadKbEntries(); loadKbChat() }
+  if (v === 'settings') { loadRealStatus(); loadComments(); refreshLoginStatus(); loadKeys(); loadGuard(); loadLibraryDocs(); loadKbEntries(); loadKbChat() }
   if (v === 'assets') { loadAssets(); api.imageStatus().then(r => { imgStatus.value = r }).catch(() => {}) }
   if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadPerformance() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig(); syncStrategyTime(); api.imageStatus().then(r => { imgStatus.value = r }).catch(() => {}) }
@@ -1416,49 +1420,7 @@ async function syncStrategyTime() {
 
 /* ================= 系统设置：账号/密钥/保护开关/知识库（客户机没有 Hermes，全部界面可操作） ================= */
 
-const acc = ref({ loading: true, loggedIn: false, username: '' })
-const qr = ref({ img: '', busy: false, error: '', left: 0, justOk: false })
-let qrTimer = null
-let qrPoll = null
-
-async function loadAccStatus() {
-  acc.value = { ...acc.value, loading: true }
-  try {
-    const s = await api.mcpStatus()
-    acc.value = { loading: false, loggedIn: !!s.loggedIn, username: s.username || '' }
-  } catch (e) {
-    acc.value = { loading: false, loggedIn: false, username: '' }
-  }
-  return acc.value
-}
-
-/** 二维码直接嵌在设置页里（切换账号 / 首次登录） */
-async function openSwitchAccount() {
-  qr.value = { img: '', busy: true, error: '', left: 0, justOk: false }
-  clearInterval(qrTimer)
-  clearTimeout(qrPoll)
-  try {
-    const r = await api.mcpQrcode()
-    const d = (r && r.data) || {}
-    const img = String(d.img || '')
-    if (!img.startsWith('data:image')) throw new Error('二维码返回异常')
-    qr.value = { img, busy: false, error: '', left: Math.round((Number(d.timeout) > 1000 ? Number(d.timeout) / 1000 : 240)), justOk: false }
-    qrTimer = setInterval(() => { qr.value = { ...qr.value, left: Math.max(0, qr.value.left - 1) } }, 1000)
-    const poll = async () => {
-      const s = await loadAccStatus()
-      if (s.loggedIn) {
-        clearInterval(qrTimer)
-        qr.value = { img: '', busy: false, error: '', left: 0, justOk: true }
-        showNotice('登录成功：' + (s.username || ''))
-        return
-      }
-      qrPoll = setTimeout(poll, 4000)
-    }
-    qrPoll = setTimeout(poll, 4000)
-  } catch (e) {
-    qr.value = { img: '', busy: false, error: '获取二维码失败：' + (e.message || ''), left: 0, justOk: false }
-  }
-}
+/* 登录 / 切号 / 退出：全部走 account.js（与左下角弹框同一套实现，见文件顶部注释） */
 
 /* ---- 密钥：手动输入 + 保存并检查 ---- */
 const keyForm = ref({ deepseekKey: '', deepseekBase: '', deepseekModel: '', imageKey: '', imageBase: '', imageProvider: '' })
@@ -3021,26 +2983,29 @@ onBeforeUnmount(() => {
 
       <!-- ============ ① 账号与密钥（客户机没有 Hermes，全部在界面里填） ============ -->
       <div class="settings-grid">
-        <!-- 小红书登录 / 切换账号：二维码直接嵌在卡里 -->
+        <!-- 小红书账号：信息一行 + 按钮；二维码在「刷新状态」右侧直接显示 -->
         <article class="setting-panel panel account-card">
-          <div class="panel-head">
+          <div class="panel-head compact">
             <div><span class="section-label">XIAOHONGSHU</span><h3>小红书账号</h3></div>
-            <span :class="['conn-state', acc.loggedIn ? 'ok' : 'bad']">{{ acc.loading ? '检测中…' : (acc.loggedIn ? '已登录' : '未登录') }}</span>
+            <span :class="['conn-state', loginState.loggedIn ? 'ok' : 'bad']">{{ !loginState.service ? '服务未启动' : (loginState.unknown ? '检测中…' : (loginState.loggedIn ? '已登录' : '未登录')) }}</span>
           </div>
-          <p class="acc-line">
-            <b>{{ acc.loggedIn ? (acc.username || '已登录账号') : '还没有登录' }}</b>
-            <small>{{ acc.loggedIn ? '授权保存在本机，失效时重新扫码即可' : '扫码后系统才能发内容、读评论' }}</small>
-          </p>
-          <div class="acc-actions">
-            <button class="outline-button" type="button" :disabled="qr.busy" @click="openSwitchAccount">
-              {{ qr.img ? '换一张二维码' : (acc.loggedIn ? '切换账号（扫码）' : '扫码登录') }}
-            </button>
-            <button class="outline-button" type="button" @click="loadAccStatus">刷新状态</button>
-          </div>
-          <div v-if="qr.img || qr.error || qr.busy" class="qr-inline">
-            <img v-if="qr.img" :src="qr.img" alt="小红书登录二维码" />
-            <div v-else class="qr-empty">{{ qr.busy ? '正在获取二维码…' : qr.error }}</div>
-            <small v-if="qr.img">用【小红书 App】→ 扫一扫 → 确认登录。二维码 {{ qr.left }} 秒后失效{{ qr.justOk ? ' · 已登录成功' : '' }}</small>
+          <div class="acc-body">
+            <div class="acc-info">
+              <b>{{ loginState.unknown ? '正在读取登录态…' : (loginState.loggedIn ? (loginState.username || '已登录账号') : '还没有登录') }}</b>
+              <small>{{ loginState.loggedIn ? '授权存在本机；换号点「切换账号（扫码）」（会先退出当前账号）' : '扫码后系统才能发内容、读评论' }}</small>
+              <div class="acc-actions">
+                <button class="outline-button slim" type="button" :disabled="scanBusy" @click="switchAccount">{{ scanBusy ? '处理中…' : (loginState.loggedIn ? '切换账号（扫码）' : '扫码登录') }}</button>
+                <button class="outline-button slim" type="button" @click="refreshLoginStatus">刷新状态</button>
+                <button v-if="loginState.loggedIn" class="outline-button slim danger" type="button" :disabled="scanBusy" @click="logoutAccount">退出登录</button>
+              </div>
+              <p v-if="scanMsg" class="acc-msg">{{ scanMsg }}</p>
+            </div>
+            <div class="qr-side">
+              <img v-if="qrImage" :src="qrImage" alt="小红书登录二维码" />
+              <div v-else class="qr-empty">{{ qrLoading ? '获取二维码…' : (qrError || (loginState.loggedIn ? '已登录 · 换号请点左侧「切换账号」' : '点左侧「扫码登录」出码')) }}</div>
+              <small v-if="qrImage">{{ qrSecondsLeft > 0 ? `二维码 ${qrSecondsLeft} 秒后失效` : '二维码已过期，点「换一张」' }}</small>
+              <button v-if="qrImage" class="link-mini" type="button" :disabled="qrLoading" @click="fetchLoginQrcode">换一张</button>
+            </div>
           </div>
         </article>
 

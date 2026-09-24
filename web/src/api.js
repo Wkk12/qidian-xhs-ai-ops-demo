@@ -160,6 +160,9 @@ export const api = {
   comments: (status) => req(`/comments${status ? `?status=${status}` : ''}`),
 
   // 密钥/渠道（客户机没有 Hermes → 界面手动填 + 当场检查）
+  mcpSwitchAccount: () => req('/mcp/switch-account', { method: 'POST' }),
+  mcpLogout: () => req('/mcp/logout', { method: 'POST' }),
+
   keysStatus: () => req('/keys/status'),
   saveKeys: (p) => req('/keys', { method: 'POST', body: p }),
   testKeys: (target = 'all') => req('/keys/test', { method: 'POST', body: { target } }),
