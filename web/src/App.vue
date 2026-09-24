@@ -196,8 +196,8 @@ async function loadTrendSeries() {
 }
 onMounted(loadTrendSeries)
 
-// 图表坐标：沿用样稿 viewBox「0 0 520 210」的网格（x 34→500，基线 y=176，顶部 y=35）
-const DASH_CHART = { x0: 34, y0: 176, w: 466, h: 141 }
+// 图表坐标：viewBox「0 0 900 200」—— 拉宽压扁（R18 页面收紧），x 34→866，基线 y=164，顶部 y=32
+const DASH_CHART = { x0: 34, y0: 164, w: 832, h: 132 }
 
 // 有真数据才画线（全是 0 视为「平台数据还没积累」，走空态，不画假的平线）
 const trendHasData = computed(
@@ -387,7 +387,7 @@ const metrics = computed(() => {
       delta: metricHint(a.loading, a.error, a.redId ? `红书号 ${maskId(a.redId)}` : ''),
     },
     {
-      label: '获赞与收藏', unit: '次', icon: LibraryBig,
+      label: '点赞与收藏', unit: '次', icon: LibraryBig,
       value: a.loading ? '…' : String(a.likes ?? '—'),
       delta: metricHint(a.loading, a.error, '来源：创作者中心'),
     },
@@ -539,14 +539,9 @@ const phoneSimilarity = computed(() => {
             <h1>{{ currentView.title }}</h1>
           </div>
           <div class="top-actions">
-            <button class="icon-button glass-button" type="button" aria-label="查看通知">
+            <button class="icon-button glass-button" type="button" aria-label="查看通知" @click="activeView = 'outline'">
               <Bell :size="18" />
               <span class="alert-dot" />
-            </button>
-            <button class="primary-button glass-button" type="button" aria-label="生成 7 天内容" @click="openPreview(maxDupPost)">
-              <Sparkles :size="17" />
-              <span>生成 7 天内容</span>
-              <ArrowUpRight :size="16" />
             </button>
           </div>
         </header>
@@ -579,23 +574,27 @@ const phoneSimilarity = computed(() => {
                 </button>
               </div>
 
-              <div class="beauty-visual" aria-label="美妆与穿搭趋势 SVG 视觉图">
-                <svg class="face-art" viewBox="0 0 420 380" aria-hidden="true">
+              <!-- 时尚简约几何视觉（R18）：细线圈 + 重点弧 + 发丝线，大留白 -->
+              <div class="beauty-visual" aria-label="时尚简约几何视觉图">
+                <svg class="geo-art" viewBox="0 0 430 248" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
                   <defs>
-                    <linearGradient id="skin" x1="0" y1="0" x2="1" y2="1">
-                      <stop offset="0" stop-color="var(--visual-soft)" />
-                      <stop offset="1" stop-color="var(--visual-deep)" />
-                    </linearGradient>
-                    <filter id="blur"><feGaussianBlur stdDeviation="22" /></filter>
+                    <radialGradient id="geoHalo" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stop-color="var(--visual-halo)" />
+                      <stop offset="100%" stop-color="var(--visual-halo)" stop-opacity="0" />
+                    </radialGradient>
                   </defs>
-                  <circle class="visual-halo" cx="218" cy="176" r="130" />
-                  <path class="visual-fill" d="M155 37c64-22 144 22 153 100 8 69-20 155-91 188-25 12-68 1-88-42-35-74-38-223 26-246Z" />
-                  <path class="face-line" d="M184 76c-21 31-25 74-15 115 8 35 25 66 55 86M177 159c17-9 36-8 51 1M187 174c10 6 20 6 31-1M218 208c-3 17-1 28 9 34M202 259c23 9 45 6 64-8" />
-                  <path class="fashion-line" d="M102 344c40-53 86-74 137-62 40 9 72 30 94 62" />
-                  <circle class="makeup-swatch swatch-a" cx="98" cy="107" r="30" />
-                  <circle class="makeup-swatch swatch-b" cx="338" cy="250" r="19" />
-                  <path class="orbit-line" d="M70 274C47 153 125 49 232 28c71-14 131 11 170 63" />
-                  <circle class="orbit-dot" cx="70" cy="274" r="5" />
+                  <circle class="geo-halo" cx="296" cy="106" r="140" fill="url(#geoHalo)" />
+                  <!-- 两根发丝线，建立结构 -->
+                  <path class="geo-hair" d="M74 28V214" />
+                  <path class="geo-hair" d="M56 214H392" />
+                  <!-- 主圈：细线 -->
+                  <circle class="geo-ring" cx="290" cy="112" r="88" />
+                  <!-- 重点弧：右上四分之一，粗线 -->
+                  <path class="geo-arc" d="M372.7 81.9A88 88 0 0 0 259.9 29.3" />
+                  <circle class="geo-dot" cx="259.9" cy="29.3" r="5.5" />
+                  <!-- 副圈：虚细线，左下错位 -->
+                  <circle class="geo-ring-two" cx="140" cy="138" r="36" />
+                  <circle class="geo-dot-two" cx="352" cy="176" r="4" />
                 </svg>
                 <div class="visual-caption">
                   <span>本周统一内容母题</span>
@@ -605,14 +604,15 @@ const phoneSimilarity = computed(() => {
               </div>
             </article>
 
+            <!-- R18：指标卡改竖排 —— 数字放大、上下留白压缩，整列高度与左侧对齐 -->
             <section class="metric-zone" aria-label="运营指标">
               <article v-for="metric in metrics" :key="metric.label" class="metric-card panel">
-                <div class="metric-head">
-                  <span class="metric-icon"><component :is="metric.icon" :size="17" /></span>
-                  <span class="delta">{{ metric.delta }}</span>
-                </div>
-                <small>{{ metric.label }}</small>
-                <strong>{{ metric.value }}<i>{{ metric.unit }}</i></strong>
+                <span class="metric-icon"><component :is="metric.icon" :size="18" /></span>
+                <span class="metric-body">
+                  <small>{{ metric.label }}</small>
+                  <strong>{{ metric.value }}<i>{{ metric.unit }}</i></strong>
+                </span>
+                <span class="delta">{{ metric.delta }}</span>
               </article>
             </section>
 
@@ -688,14 +688,14 @@ const phoneSimilarity = computed(() => {
                 <span class="live-pill"><span /> 平台数据</span>
               </div>
               <div class="chart-wrap">
-                <svg v-if="trendLine" viewBox="0 0 520 210" role="img" :aria-label="`每日浏览量趋势图 · ${trendWindowLabel}`">
+                <svg v-if="trendLine" viewBox="0 0 900 200" role="img" :aria-label="`每日浏览量趋势图 · ${trendWindowLabel}`">
                   <g class="chart-grid">
-                    <path d="M34 35H500M34 82H500M34 129H500M34 176H500" />
+                    <path d="M34 32H866M34 76H866M34 120H866M34 164H866" />
                   </g>
                   <path class="chart-area" :d="trendArea" />
                   <path class="chart-line" pathLength="1" :d="trendLine" />
                   <g class="chart-labels">
-                    <text v-for="t in trendTicks" :key="t.key" :x="t.x" y="202">{{ t.date }}</text>
+                    <text v-for="t in trendTicks" :key="t.key" :x="t.x" y="192">{{ t.date }}</text>
                   </g>
                 </svg>
                 <p v-else class="chart-empty">

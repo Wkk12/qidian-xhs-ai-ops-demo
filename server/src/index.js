@@ -140,6 +140,7 @@ app.get('/api/mcp/circuit', async () => ({ ok: true, circuit: circuitState() }))
 /** 手动清状态缓存（排障用：扫码成功后想立刻刷新可调它） */
 app.post('/api/mcp/status/refresh', async () => {
   _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };
+  _meCache = { at: 0, data: null, inflight: null }; // 账号资料缓存一起清（登录/换号后要立刻拿到新账号）
   return { ok: true, cleared: true };
 });
 
@@ -148,9 +149,37 @@ app.get('/api/mcp/qrcode', async () => {
   return { ok: true, data: r?.data || null };
 });
 
-app.get('/api/mcp/me', async () => {
-  const r = await mcp.me();
-  const b = r?.data?.data || r?.data || {};
+/**
+ * 账号资料缓存（stale-while-revalidate）：
+ * 实测 mcp.me() 单次约 12 秒（MCP 上游慢）→ 首页三个指标卡要等 12 秒才出数字。
+ * 策略：有缓存就先秒回缓存值，同时在后台静默刷新；过期（>5 分钟）才等待真实调用。
+ */
+let _meCache = { at: 0, data: null, inflight: null };
+const ME_TTL_MS = 5 * 60 * 1000;
+function refreshMe() {
+  _meCache.inflight = mcp
+    .me()
+    .then((r) => {
+      const b = r?.data?.data || r?.data || {};
+      _meCache = { at: Date.now(), data: b, inflight: null };
+      return b;
+    })
+    .catch((e) => {
+      _meCache.inflight = null;
+      throw e;
+    });
+  return _meCache.inflight;
+}
+async function mePayload() {
+  const age = Date.now() - _meCache.at;
+  if (_meCache.data) {
+    if (age >= ME_TTL_MS && !_meCache.inflight) refreshMe().catch(() => {}); // 后台刷新，不阻塞
+    return { payload: _meCache.data, cached: true, cacheAgeMs: age };
+  }
+  if (!_meCache.inflight) refreshMe();
+  return { payload: await _meCache.inflight, cached: false, cacheAgeMs: 0 };
+}
+function shapeMe(b) {
   const ub = b.userBasicInfo || {};
   const inter = {};
   for (const i of (b.interactions || [])) inter[i.type] = Number(i.count || 0);
@@ -165,6 +194,13 @@ app.get('/api/mcp/me', async () => {
     likes: inter.interaction || 0,
     noteCount: (b.feeds || []).length,
   };
+}
+
+app.get('/api/mcp/me', async (req) => {
+  const force = String((req.query || {}).force || '') === '1';
+  if (force) _meCache = { at: 0, data: null, inflight: null };
+  const { payload, cached, cacheAgeMs } = await mePayload();
+  return { ...shapeMe(payload), cached, cacheAgeMs };
 });
 
 // 我的笔记列表（用于数据洞察；互动数据来自列表卡片，成本低）
@@ -239,11 +275,41 @@ function creatorHeaders() {
   };
 }
 
+/**
+ * 创作者中心取数（唯一通道）
+ * 2026-09-24 加固：① 60 秒缓存（首页 + 数据洞察会同时打同一个接口）② 网络抖动重试 2 次
+ * 实测首页加载时并发请求会出现 `fetch failed` → 趋势图直接显示错误，体验很差（且不是真·登录失效）
+ */
+const _galaxyCache = new Map();
+const GALAXY_TTL_MS = 60 * 1000;
 async function galaxy(pathname) {
-  const r = await fetch('https://creator.xiaohongshu.com' + pathname, { headers: creatorHeaders() });
-  const text = await r.text();
-  if (!r.ok) throw new Error(`创作者中心返回 ${r.status}`);
-  return JSON.parse(text);
+  const hit = _galaxyCache.get(pathname);
+  if (hit && Date.now() - hit.at < GALAXY_TTL_MS) return hit.data;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch('https://creator.xiaohongshu.com' + pathname, {
+        headers: creatorHeaders(),
+        signal: AbortSignal.timeout(15000),
+      });
+      const text = await r.text();
+      if (!r.ok) {
+        const err = new Error(`创作者中心返回 ${r.status}`);
+        err.status = r.status;
+        if (r.status === 401 || r.status === 403) throw err; // 登录态问题，重试无意义
+        lastErr = err;
+      } else {
+        const j = JSON.parse(text);
+        _galaxyCache.set(pathname, { at: Date.now(), data: j });
+        return j;
+      }
+    } catch (e) {
+      lastErr = e;
+      if (e.status === 401 || e.status === 403) throw e;
+    }
+    await new Promise((res) => setTimeout(res, 700 * (attempt + 1)));
+  }
+  throw lastErr || new Error('创作者中心请求失败');
 }
 
 const CREATOR_METRICS = [

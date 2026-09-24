@@ -119,38 +119,43 @@ button.account-mini:hover { background: var(--sidebar-active); }
 .primary-button:hover { transform: translateY(-2px); box-shadow: 0 14px 26px -16px var(--accent); }
 .primary-button:active { transform: translateY(0) scale(.98); }
 
-.dashboard-grid { margin-top: 16px; display: grid; gap: 12px; }
+.dashboard-grid { margin-top: 12px; display: grid; gap: 10px; }
 .panel { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--panel); box-shadow: 0 1px 3px var(--panel-shadow); }
 .spotlight { overflow: hidden; }
 .spotlight-copy { min-width: 0; }
-.spotlight h2 { margin: 10px 0 11px; font-size: 33px; line-height: 1.05; letter-spacing: -.055em; overflow-wrap: anywhere; }
+.spotlight h2 { margin: 6px 0 8px; font-size: 26px; line-height: 1.05; letter-spacing: -.055em; overflow-wrap: anywhere; }
 .spotlight h2 em { color: var(--accent); font-family: "Songti SC", "STSong", serif; font-weight: 500; }
 .spotlight p { max-width: 520px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.75; }
-.text-action { margin-top: 15px; padding: 0; display: inline-flex; align-items: center; gap: 8px; border: 0; color: var(--ink); background: transparent; cursor: pointer; font-size: 12px; font-weight: 700; }
-.text-action svg { width: 29px; height: 29px; padding: 8px; border-radius: 50%; color: var(--button-ink); background: var(--accent); transition: transform .25s var(--ease); }
+.text-action { margin-top: 12px; padding: 0; display: inline-flex; align-items: center; gap: 8px; border: 0; color: var(--ink); background: transparent; cursor: pointer; font-size: 12px; font-weight: 700; }
+.text-action svg { width: 27px; height: 27px; padding: 7px; border-radius: 50%; color: var(--button-ink); background: var(--accent); transition: transform .25s var(--ease); }
 .text-action:hover svg { transform: scale(1.08); }
-.beauty-visual { position: relative; min-height: 236px; overflow: hidden; background: var(--visual-bg); }
-.face-art { width: 100%; height: 100%; position: absolute; inset: 0; overflow: visible; }
-.visual-halo { fill: var(--visual-halo); filter: url(#blur); }
-.visual-fill { fill: url(#skin); }
-.face-line, .fashion-line, .orbit-line { fill: none; stroke: var(--visual-line); stroke-width: 2; stroke-linecap: round; }
-.face-line { stroke-width: 2.4; }
-.makeup-swatch { fill: var(--accent); opacity: .92; }
-.swatch-b { fill: var(--accent-two); }
-.orbit-line { stroke-dasharray: 4 8; opacity: .48; animation: orbit-dash 12s linear infinite; }
-.orbit-dot { fill: var(--accent); animation: dot-pulse 2s ease-in-out infinite; }
+.beauty-visual { position: relative; min-height: 200px; overflow: hidden; background: var(--visual-bg); }
+/* R18 新视觉：细线圈 + 重点弧 + 发丝线（时尚简约，大留白） */
+.geo-art { width: 100%; height: 100%; position: absolute; inset: 0; overflow: visible; }
+.geo-halo { opacity: .9; }
+.geo-ring, .geo-ring-two { fill: none; stroke: var(--visual-line); stroke-linecap: round; }
+.geo-ring { stroke-width: 1.4; opacity: .55; }
+.geo-ring-two { stroke-width: 1; stroke-dasharray: 3 7; opacity: .45; }
+.geo-arc { fill: none; stroke: var(--accent); stroke-width: 8; stroke-linecap: round; }
+.geo-arc-two { fill: none; stroke: var(--accent-two); stroke-width: 2.4; stroke-linecap: round; opacity: .9; }
+.geo-dot { fill: var(--accent); }
+.geo-dot-two { fill: var(--accent-two); }
+.geo-hair { fill: none; stroke: var(--visual-line); stroke-width: 1; opacity: .22; }
 .visual-caption { position: absolute; left: 17px; right: 17px; bottom: 15px; padding: 12px 14px; border: 1px solid var(--glass-border); border-radius: 14px; background: var(--visual-caption); backdrop-filter: blur(15px); }
 .visual-caption span, .visual-caption b { display: block; }
 .visual-caption span { color: var(--muted); font-size: 9px; }
 .visual-caption b { margin-top: 4px; font-size: 11px; }
 
-.metric-zone { display: grid; gap: 12px; }
-.metric-card { padding: 13px 14px; display: flex; flex-direction: column; justify-content: center; }
-.metric-head { display: flex; align-items: center; justify-content: space-between; }
-.metric-icon { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
-.delta { padding: 4px 7px; border-radius: 999px; color: var(--positive); background: var(--positive-soft); font-size: 9px; font-weight: 700; }
+/* R18：三个指标竖排横卡 —— 数字放大、上下留白压缩（原三列卡片又高又空） */
+.metric-zone { display: grid; gap: 10px; grid-auto-rows: 1fr; }
+.metric-card { padding: 10px 14px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.metric-head { display: contents; }
+.metric-icon { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
+.metric-body { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.metric-body small { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.delta { padding: 0; border-radius: 0; color: var(--muted); background: transparent; font-size: 9px; font-weight: 600; white-space: nowrap; }
 .metric-card > small { display: block; margin-top: 14px; color: var(--muted); font-size: 10px; }
-.metric-card > strong { display: block; margin-top: 2px; font-size: 34px; font-variant-numeric: tabular-nums; letter-spacing: -.045em; }
+.metric-card > strong, .metric-body strong { display: block; font-size: 42px; line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: -.045em; }
 .metric-card strong i { margin-left: 4px; color: var(--muted); font-size: 10px; font-style: normal; font-weight: 500; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; }
 .panel-head h3 { margin: 4px 0 0; font-size: 16px; letter-spacing: -.02em; }
@@ -171,7 +176,7 @@ button.account-mini:hover { background: var(--sidebar-active); }
 .post-state.originality-pass { color: var(--positive); }
 .post-arrow { color: var(--muted); }
 
-.trend-card, .schedule, .ai-card { padding: 16px; }
+.trend-card, .schedule, .ai-card { padding: 14px 15px; }
 .live-pill { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
 .live-pill span { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); box-shadow: 0 0 0 4px var(--positive-soft); animation: dot-pulse 2s ease-in-out infinite; }
 .chart-wrap { margin-top: 12px; }
@@ -296,8 +301,9 @@ button.account-mini:hover { background: var(--sidebar-active); }
   .primary-button { width: 43px; padding: 0; justify-content: center; }
   .primary-button svg:last-child { display: none; }
   .metric-zone { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .metric-card { padding: 11px; }
-  .metric-card > strong { font-size: 24px; }
+  .metric-card { padding: 9px 11px; gap: 8px; }
+  .metric-body strong { font-size: 30px; }
+  .delta { display: none; }
   .post-state { display: none; }
   .post-row { grid-template-columns: 46px 42px minmax(0, 1fr) 16px; }
   .feed-grid { grid-template-columns: 1fr; }
