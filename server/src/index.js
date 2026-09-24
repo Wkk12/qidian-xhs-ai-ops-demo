@@ -14,7 +14,10 @@ import { mcp, extractMetrics, circuitState } from './mcp.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { registerInteractionApi } from './interaction.js';
 import { registerAnalyticsApi } from './analytics.js';
-import { generateWeek, runGeneration, getPositioning, getGoodPosts, getTrends } from './generate.js';
+import { registerOutlineApi, strategyText, getStrategy } from './outline.js';
+import { registerLibraryApi } from './library.js';
+import { isReplyEnabled, setReplyEnabled } from './comments.js';
+import { generateWeek, runGeneration, getPositioning, getGoodPosts, getTrends, platformText, refreshPlatformRef } from './generate.js';
 import { checkDuplicate } from './dedupe.js';
 import { collectSnapshots, buildReport } from './report.js';
 import { generateImage, expandPrompt, imagegenReady, TIERS } from './imagegen.js';
@@ -41,6 +44,8 @@ await app.register(fastifyStatic, { root: UPLOAD_DIR, prefix: '/files/' });
 await registerAssets(app);
 await registerInteractionApi(app);
 await registerAnalyticsApi(app);
+await registerOutlineApi(app);
+await registerLibraryApi(app);
 
 // 前端页面托管（构建产物 web/dist）→ 访问 http://127.0.0.1:8787 直接出页面，无需单独起前端
 const WEB_DIST = path.resolve(__dirname, '../../web/dist');
@@ -322,6 +327,20 @@ const CREATOR_METRICS = [
   ['rise_fans_count', 'rise_fans_list', '涨粉'],
 ];
 
+
+/** 平台 date 可能是 'YYYY-MM-DD' / 10 位秒 / 13 位毫秒 → 统一成 'YYYY-MM-DD'
+ *  （2026-09-24 修：AI 解读里曾出现裸时间戳「1788796800」） */
+function dayOf(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (/^\d{10,13}$/.test(s)) {
+    const n = Number(s);
+    const dt = new Date(n < 1e12 ? n * 1000 : n);
+    return Number.isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 10);
+  }
+  return s.slice(0, 10);
+}
+
 function pickWindow(win) {
   if (!win) return null;
   const out = { summary: [], series: {} };
@@ -329,7 +348,7 @@ function pickWindow(win) {
     const rate = win[totalKey.replace('_count', '_count_rate')];
     out.summary.push({ key: totalKey, label, total: win[totalKey], rate: rate });
     const series = (win[listKey] || []).map((p) => ({
-      date: new Date(p.date).toISOString().slice(0, 10),
+      date: dayOf(p.date),
       count: p.count,
     }));
     out.series[totalKey] = series;
@@ -438,6 +457,8 @@ app.post('/api/comments/match-test', async (req) => {
   const text = (req.body || {}).text || '';
   const hit = matchKnowledge(text);
   return { ok: true, text, matched: !!hit, score: hit ? hit.score : 0,
+           source: hit ? (hit.source || 'manual') : null,
+           docId: hit ? (hit.item.doc_id || null) : null,
            question: hit ? hit.item.question : null, answer: hit ? hit.item.answer : null };
 });
 
@@ -686,14 +707,19 @@ app.post('/api/generate', async (req) => {
 });
 
 // 生成前的参考系预览（让用户看到这次用了哪些参考）
-app.get('/api/generate/context', async () => ({
+app.get('/api/generate/context', async () => {
+  await refreshPlatformRef(); // §0：把「平时数据」也取出来，生成前就能看到用了什么
+  return {
   ok: true,
+  strategy: { ...getStrategy(), text: strategyText() },
+  platform: { text: platformText() },
   positioning: getPositioning(),
   goodPosts: getGoodPosts(8).map((g) => ({
     title: g.title, liked: g.liked, collected: g.collected, rate: Number((g.rate * 100).toFixed(0)),
   })),
   trends: getTrends(10),
-}));
+  };
+});
 
 // ---------- 行业热榜抓取（每天 2 次自动 + 手动触发） ----------
 const TREND_KEYWORDS = ['化妆教程', '新手化妆', '底妆', '眼妆', '通勤妆'];
@@ -877,10 +903,21 @@ app.post('/api/mcp/detail', async (req) => {
 // ---------- 文案库 ----------
 app.get('/api/contents', async (req) => {
   const { status, limit = 100 } = req.query || {};
+  // R19：带出「是否已有发布任务」→ 前端才知道这条草稿会不会被 7 天清理（与后端 purge 判据一致）
+  const base = `
+    SELECT c.*,
+      (SELECT COUNT(*) FROM publish_tasks t
+        WHERE t.content_id = c.id
+          AND t.status IN ('pending','awaiting_confirm','precheck','publishing','done','failed')) AS task_count
+    FROM contents c`;
   const rows = status
-    ? db.prepare('SELECT * FROM contents WHERE status=? ORDER BY id DESC LIMIT ?').all(status, Number(limit))
-    : db.prepare('SELECT * FROM contents ORDER BY id DESC LIMIT ?').all(Number(limit));
-  return { ok: true, count: rows.length, items: rows };
+    ? db.prepare(`${base} WHERE c.status=? ORDER BY c.id DESC LIMIT ?`).all(status, Number(limit))
+    : db.prepare(`${base} ORDER BY c.id DESC LIMIT ?`).all(Number(limit));
+  return {
+    ok: true,
+    count: rows.length,
+    items: rows.map((r) => ({ ...r, scheduled: Number(r.task_count || 0) > 0 })),
+  };
 });
 
 app.post('/api/contents', async (req) => {
@@ -976,6 +1013,10 @@ app.get('/api/comments', async (req) => {
 });
 
 // ---------- 设置（密钥只回掩码）----------
+// ---------- R23 互动区：评论自动回复总开关 ----------
+app.get('/api/reply/settings', async () => ({ ok: true, enabled: isReplyEnabled() }));
+app.post('/api/reply/settings', async (req) => setReplyEnabled(!!(req.body || {}).enabled));
+
 app.get('/api/settings', async () => {
   const rows = db.prepare('SELECT key,masked,updated_at FROM settings').all();
   return { ok: true, items: rows };

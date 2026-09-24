@@ -327,6 +327,30 @@ async function loadContents() {
         type: it.source === 'generated' ? 'AI 生成' : '历史笔记',
         state: STATUS_MAP[it.status] || it.status || '待发布',
       }))
+    // R19：待发送内容池（生成但还没发出去）= draft / approved；收藏或已排期不参与 7 天清理
+    generatedTotal.value = items.filter((it) => it.source === 'generated').length
+    poolRows.value = items
+      .filter((it) => POOL_STATUSES.includes(it.status))
+      .map((it) => {
+        const age = daysSince(it.created_at)
+        return {
+          id: it.id,
+          title: it.title || '(无标题)',
+          body: it.body || '',
+          status: it.status,
+          state: STATUS_MAP[it.status] || it.status,
+          source: it.source || '',
+          favorite: Number(it.favorite || 0) === 1,
+          scheduled: !!it.scheduled,
+          createdAt: it.created_at || '',
+          date: (it.created_at || '').slice(5, 10).replace('-', '/'),
+          ageDays: age,
+          remainDays: Math.max(0, KEEP_DAYS - age),
+          dupScore: typeof it.dup_score === 'number' ? Math.round(it.dup_score * 100) : null,
+          tags: (() => { try { const a = JSON.parse(it.tags || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } })(),
+          imageCount: (() => { try { const a = JSON.parse(it.images || '[]'); return Array.isArray(a) ? a.length : 0 } catch { return 0 } })(),
+        }
+      })
   } catch (e) {
     /* 读取失败保持空，页面显示空状态 */
   } finally {
@@ -341,9 +365,12 @@ const onViewChange = (v) => {
   if (v === 'assets') { loadAssets(); api.imageStatus().then(r => { imgStatus.value = r }).catch(() => {}) }
   if (v === 'analytics') { loadMyNotes(); loadMetrics(); loadCreator(); loadCompetitors(); loadPerformance() }
   if (v === 'studio') { loadContents(); loadTrends(); loadAiStatus(); syncGenConfig() }
-  if (v === 'library') loadLibrary()
-  if (v === 'schedule') { loadContents(); loadPublish(true); loadScheduler() }
-  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning(); loadCompetitors(); loadWeekPlan() }
+  if (v === 'library') { loadLibrary(); loadLibraryDocs() }
+  if (v === 'schedule') {
+    loadContents(); loadPublish(true); loadPubSettings()
+    if (!weekSelected.value) weekSelected.value = isoDate(new Date())
+  }
+  if (v === 'outline' || v === 'dashboard') { loadContents(); loadPositioning(); loadCompetitors(); loadWeekPlan(); loadOutline(); loadChat(); loadReplySetting(); loadInteractionFeed() }
 }
 /* -------- 内容趋势（真实：来自每日采集的指标快照） -------- */
 const metricsRows = ref([])
@@ -1357,6 +1384,485 @@ const showNotice = (message) => {
   noticeTimer = window.setTimeout(() => { notice.value = '' }, 2200)
 }
 
+/* ================= R22 运营大纲 / R23 互动区 / R24 资料库 ================= */
+
+/* ---- R22 ---- */
+const strategy = ref(null)
+const strategyError = ref('')
+const strategyBusy = ref(false)
+const strategySaving = ref(false)
+const strategyEditing = ref(false)
+const strategyForm = ref({ howTo: '', goals: '', phasesText: '' })
+const chatItems = ref([])
+const chatDraft = ref('')
+const chatSending = ref(false)
+const blocksOpen = ref(false)
+const blocksSaving = ref(false)
+const blocks = ref({ persona: '', audience: '', selling: '', tone: '', goal: '' })
+
+const blocksSummary = computed(() => {
+  const b = blocks.value
+  const parts = [b.persona, b.audience, b.selling].filter(Boolean)
+  return parts.length ? parts.join('　|　') : '还没设置 —— 这三块决定生成的方向，填一次就够（保存后自动折叠）'
+})
+
+function formFromStrategy(s) {
+  return {
+    howTo: s.howTo || '',
+    goals: s.goals || '',
+    phasesText: (s.phases || []).map((p) => `${p.name || ''} | ${p.goal || ''} | ${(p.topics || []).join('、')}`).join('\n'),
+  }
+}
+
+async function loadOutline() {
+  try {
+    const r = await api.outline()
+    strategy.value = r.strategy && r.strategy.exists ? r.strategy : null
+    strategyForm.value = r.strategy ? formFromStrategy(r.strategy) : formFromStrategy({})
+    const p = r.positioning || {}
+    blocks.value = {
+      persona: [p.persona, p.tone].filter(Boolean).join('，'),
+      audience: p.audience || '',
+      selling: [p.selling, p.goal].filter(Boolean).join('；'),
+      tone: p.tone || '',
+      goal: p.goal || '',
+    }
+    // 已填过就默认折叠（不点开不展示）
+    blocksOpen.value = !(blocks.value.persona || blocks.value.audience || blocks.value.selling)
+  } catch (e) {
+    strategyError.value = '读取运营大纲失败：' + (e.message || '')
+  }
+}
+
+async function genStrategyDraft() {
+  strategyBusy.value = true
+  strategyError.value = ''
+  try {
+    const r = await api.genStrategy(strategyInput.value || '')
+    strategy.value = r.strategy
+    strategyForm.value = formFromStrategy(r.strategy)
+    showNotice('AI 策略初稿已生成')
+  } catch (e) {
+    strategyError.value = '生成失败：' + (e.message || '')
+  } finally {
+    strategyBusy.value = false
+  }
+}
+
+function parsePhases(text) {
+  return String(text || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [name = '', goal = '', topics = ''] = line.split('|').map((x) => (x || '').trim())
+    return { name, goal, topics: topics.split(/[、,，]/).map((s) => s.trim()).filter(Boolean) }
+  })
+}
+
+async function saveStrategyManual() {
+  strategySaving.value = true
+  strategyError.value = ''
+  try {
+    const r = await api.saveStrategy({
+      howTo: strategyForm.value.howTo,
+      goals: strategyForm.value.goals,
+      phases: parsePhases(strategyForm.value.phasesText),
+    })
+    strategy.value = r.strategy
+    strategyEditing.value = false
+    showNotice('策略已保存（会进入生成参考系）')
+  } catch (e) {
+    strategyError.value = '保存失败：' + (e.message || '')
+  } finally {
+    strategySaving.value = false
+  }
+}
+
+async function loadChat() {
+  try { const r = await api.outlineChat(40); chatItems.value = r.items || [] } catch { chatItems.value = [] }
+}
+
+async function sendChat() {
+  const msg = chatDraft.value.trim()
+  if (!msg || chatSending.value) return
+  chatSending.value = true
+  chatDraft.value = ''
+  try {
+    const r = await api.sendOutlineChat(msg)
+    chatItems.value = [...chatItems.value, { id: 'u' + Date.now(), role: 'user', content: msg }, { id: 'a' + Date.now(), role: 'assistant', content: r.reply, applied: r.applied }]
+    if (r.strategy) { strategy.value = r.strategy; strategyForm.value = formFromStrategy(r.strategy) }
+    showNotice(r.applied && r.applied.fields && r.applied.fields.length ? 'AI 已真实修改策略' : '已回复')
+  } catch (e) {
+    showNotice('发送失败：' + (e.message || ''))
+    chatDraft.value = msg
+  } finally {
+    chatSending.value = false
+  }
+}
+
+async function resetChatHistory() {
+  try { await api.resetOutlineChat(); chatItems.value = []; showNotice('对话已清空（策略不受影响）') } catch (e) { showNotice('清空失败：' + (e.message || '')) }
+}
+
+async function saveBlocks() {
+  blocksSaving.value = true
+  try {
+    const personaParts = String(blocks.value.persona || '').split(/[，,]/).map((s) => s.trim()).filter(Boolean)
+    const sellParts = String(blocks.value.selling || '').split(/[；;]/).map((s) => s.trim()).filter(Boolean)
+    await api.saveOutlinePositioning({
+      persona: personaParts[0] || String(blocks.value.persona || ''),
+      tone: personaParts.slice(1).join('，'),
+      audience: blocks.value.audience,
+      selling: sellParts[0] || String(blocks.value.selling || ''),
+      goal: sellParts.slice(1).join('；'),
+    })
+    blocksOpen.value = false
+    showNotice('三板块已保存并收起')
+  } catch (e) {
+    showNotice('保存失败：' + (e.message || ''))
+  } finally {
+    blocksSaving.value = false
+  }
+}
+
+/* ---- R23 ---- */
+const replyOn = ref(false)
+const replySaving = ref(false)
+const feedReplies2 = ref([])
+const feedIncoming2 = ref([])
+
+async function loadReplySetting() {
+  try { const r = await api.replySettings(); replyOn.value = !!r.enabled } catch { replyOn.value = false }
+}
+async function toggleReply() {
+  if (replySaving.value) return
+  replySaving.value = true
+  try {
+    const r = await api.setReplySettings(!replyOn.value)
+    replyOn.value = !!r.enabled
+    showNotice(r.enabled ? '评论自动回复已开启' : '已关闭：评论只收集不自动发，转人工待办')
+  } catch (e) {
+    showNotice('切换失败：' + (e.message || ''))
+  } finally {
+    replySaving.value = false
+  }
+}
+async function loadInteractionFeed() {
+  try {
+    const r = await api.interactionFeed(40)
+    feedReplies2.value = Array.isArray(r.replies) ? r.replies : []
+    feedIncoming2.value = Array.isArray(r.incoming) ? r.incoming : []
+  } catch { feedReplies2.value = []; feedIncoming2.value = [] }
+}
+
+/* ---- R24 ---- */
+const docs = ref([])
+const docEntries = ref(0)
+const docUploading = ref(false)
+const docError = ref('')
+const docMsg = ref('')
+const docBusy = ref(null)
+const docInput = ref(null)
+const matchProbe = ref('')
+const matchProbing = ref(false)
+const matchResult = ref(null)
+
+async function loadLibraryDocs() {
+  try {
+    const r = await api.libraryDocs()
+    docs.value = r.items || []
+    docEntries.value = r.entries || 0
+  } catch (e) {
+    docError.value = '读取资料库失败：' + (e.message || '')
+  }
+}
+function pickDocs() { docInput.value && docInput.value.click() }
+async function onDocsPicked(ev) {
+  const files = [...(ev.target.files || [])]
+  ev.target.value = ''
+  if (!files.length) return
+  docUploading.value = true
+  docError.value = ''
+  docMsg.value = ''
+  try {
+    const r = await api.libraryUpload(files)
+    const ok = (r.items || []).filter((x) => x.status === 'ok')
+    const bad = (r.items || []).filter((x) => x.status !== 'ok')
+    docMsg.value = `上传完成：${ok.length} 份解析成功（共 ${ok.reduce((n, x) => n + (x.entries || 0), 0)} 条知识条目）`
+      + (bad.length ? `；${bad.length} 份解析失败：${bad.map((x) => x.name + '（' + (x.note || '') + '）').join('；')}` : '')
+    await loadLibraryDocs()
+  } catch (e) {
+    docError.value = '上传失败：' + (e.message || '')
+  } finally {
+    docUploading.value = false
+  }
+}
+async function rebuildDoc(d) {
+  docBusy.value = d.id
+  try { const r = await api.rebuildLibraryDoc(d.id); showNotice(`已重建 ${r.entries} 条知识条目`); await loadLibraryDocs() }
+  catch (e) { showNotice('重建失败：' + (e.message || '')) }
+  finally { docBusy.value = null }
+}
+async function removeDoc(d) {
+  if (!window.confirm(`确认删除《${d.name}》？
+连带它生成的知识条目一起删除（评论回复将不再引用它）。`)) return
+  try { const r = await api.deleteLibraryDoc(d.id); showNotice(`已删除（连带 ${r.removedEntries} 条知识条目）`); await loadLibraryDocs() }
+  catch (e) { showNotice('删除失败：' + (e.message || '')) }
+}
+async function runMatchProbe() {
+  const t = matchProbe.value.trim()
+  if (!t) return
+  matchProbing.value = true
+  matchResult.value = null
+  try { matchResult.value = await api.matchTest(t) } catch (e) { matchResult.value = { matched: false, error: e.message } }
+  finally { matchProbing.value = false }
+}
+
+/* ================= R20 排期发布：自动发送 / 发布保护 / 周视图 ================= */
+
+const pubSet = ref({ autoSend: true, protect: true, preMinutes: 15 })
+const pubSetSaving = ref(false)
+const pubSetError = ref('')
+const manualTimeOpen = ref(false)
+const weekSelected = ref('')
+const expandedTask = ref(null)
+const editingTask = ref(null)
+const taskSaving = ref(null)
+const precheckForId = ref(null)
+const taskEdit = ref({})          // taskId → { title, body, tagsText }
+
+function pubSetNotice(key, v) {
+  if (key === 'autoSend') return v ? '自动发送 → 开（到点直接发送）' : '自动发送 → 关（到点需手动确认）'
+  return v ? '发布保护 → 开（五项预检全过才发）' : '发布保护 → 关（跳过预检直接进入发送）'
+}
+
+async function loadPubSettings() {
+  try {
+    const r = await api.publishSettings()
+    pubSet.value = { autoSend: !!r.autoSend, protect: !!r.protect, preMinutes: r.preMinutes || 15 }
+    pubSetError.value = ''
+  } catch (e) {
+    pubSetError.value = '读取发布设置失败：' + (e.message || '')
+  }
+}
+
+async function togglePubSet(key) {
+  if (pubSetSaving.value) return
+  pubSetSaving.value = true
+  const next = !pubSet.value[key]
+  try {
+    const r = await api.setPublishSettings({ [key]: next })
+    pubSet.value = { autoSend: !!r.autoSend, protect: !!r.protect, preMinutes: r.preMinutes || 15 }
+    showNotice(pubSetNotice(key, next))
+  } catch (e) {
+    pubSetError.value = '保存失败：' + (e.message || '')
+  } finally {
+    pubSetSaving.value = false
+  }
+}
+
+/* 周视图：周一 ~ 周日（默认定位今天） */
+function isoDate(d) {
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+function localDay(ts) {
+  if (!ts) return ''
+  const s = String(ts)
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (m) return m[1]
+  const d = new Date(s)
+  return Number.isNaN(d.getTime()) ? '' : isoDate(d)
+}
+const weekDays = computed(() => {
+  const now = new Date()
+  const dow = (now.getDay() + 6) % 7                 // 周一 = 0
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow)
+  const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+  const todayIso = isoDate(now)
+  return names.map((label, i) => {
+    const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i)
+    const iso = isoDate(d)
+    const count = (pubTasks.value || []).filter((t) => localDay(t.scheduled_at) === iso).length
+    return { label, iso, md: iso.slice(5).replace('-', '/'), count, isToday: iso === todayIso }
+  })
+})
+const weekTasks = computed(() => (pubTasks.value || [])
+  .filter((t) => localDay(t.scheduled_at) === weekSelected.value)
+  .sort((a, b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at))))
+
+function hhmm(s) { return String(s || '').slice(11, 16) || '--:--' }
+function fmtSent(s) { return s ? String(s).replace('T', ' ').slice(5, 16) : '未发送' }
+function taskImages(t) {
+  try { const a = JSON.parse(t.content_images || '[]'); return Array.isArray(a) ? a.filter((x) => x && x.url) : [] } catch { return [] }
+}
+function taskTags(t) {
+  try { const a = JSON.parse(t.content_tags || '[]'); return Array.isArray(a) && a.length ? a.join(' ') : '（无话题标签）' } catch { return '（无话题标签）' }
+}
+function toggleTask(t) {
+  expandedTask.value = expandedTask.value === t.id ? null : t.id
+  precheckForId.value = null
+  precheckResult.value = null
+  if (expandedTask.value !== t.id) editingTask.value = null
+}
+function startEditTask(t) {
+  taskEdit.value[t.id] = { title: t.content_title || '', body: t.content_body || '', tagsText: taskTags(t) === '（无话题标签）' ? '' : taskTags(t) }
+  editingTask.value = t.id
+}
+async function saveTaskContent(t) {
+  const d = taskEdit.value[t.id]
+  if (!d) { return }
+  taskSaving.value = t.id
+  try {
+    await api.updateContent(t.content_id, {
+      title: d.title, body: d.body,
+      tags: JSON.stringify(d.tagsText.split(/[\s,，]+/).filter(Boolean)),
+    })
+    showNotice('已保存')
+    editingTask.value = null
+    await loadPublish()
+    await loadContents()
+  } catch (e) {
+    showNotice('保存失败：' + (e.message || ''))
+  } finally {
+    taskSaving.value = null
+  }
+}
+async function confirmPubTask(t) {
+  if (!window.confirm('确认现在发送这条到小红书？\n会真实发布到你的账号上。')) return
+  try {
+    const r = await api.confirmTask(t.id)
+    showNotice(r.ok ? '已确认并发送' : ('发送未完成：' + (r.error || '')))
+    await loadPublish()
+  } catch (e) {
+    showNotice('确认失败：' + (e.message || ''))
+  }
+}
+async function precheckTask(t) {
+  precheckForId.value = t.id
+  precheckResult.value = null
+  try {
+    const r = await api.precheckPublish({ contentId: t.content_id })
+    precheckResult.value = r
+  } catch (e) {
+    precheckResult.value = { pass: false, items: [{ name: '预检', ok: false, detail: e.message || '调用失败' }] }
+  }
+}
+
+/* ================= R19 内容工坊：统一生成入口 / 待发送内容池 / 独立生图 ================= */
+
+// 待发送内容池（生成但未发出）：draft / approved；7 天未排期自动清理，收藏 = 永久保留
+const POOL_STATUSES = ['draft', 'approved']
+const KEEP_DAYS = 7
+const poolRows = ref([])
+const generatedTotal = ref(0)
+const favoriteBusy = ref(null)
+const schedPicker = ref({})      // contentId → datetime-local 字符串
+const schedItemBusy = ref(null)
+
+// 一起生图 / 生成后直接排期
+const genImages = ref(false)
+const genScheduleOn = ref(false)
+const genScheduleDate = ref('')
+const genScheduleTime = ref('19:30')
+const genSchedMsg = ref('')
+
+function daysSince(ts) {
+  if (!ts) return 0
+  const d = new Date(String(ts).replace(' ', 'T'))
+  if (Number.isNaN(d.getTime())) return 0
+  return Math.floor((Date.now() - d.getTime()) / 86400000)
+}
+
+// 首次（没有生成内容）= 7 天；之后每次 = 1 篇 —— 与后端 resolveGenerateMode 同规则
+const genModePreview = computed(() => (generatedTotal.value === 0 ? 'seven' : 'single'))
+const genModeLabel = computed(() => (
+  genModePreview.value === 'seven'
+    ? `第一次生成：7 天内容（${7 * (genPostsPerDay.value || 1)} 篇，沿七天叙事）`
+    : '已有内容：本次生成 1 篇（承接上一篇）'
+))
+
+// 统一生成入口（R19）：只此一个按钮，替代原先三个冲突入口
+async function runGenerateUnified() {
+  if (genRunning.value) return
+  if (aiReady.value === false) { genError.value = 'AI 未就绪：请先在「系统设置」确认 DeepSeek Key'; return }
+  if (genScheduleOn.value && !genScheduleDate.value) { genError.value = '已打开「生成后直接排期」，请先选一个开始日期'; return }
+  genRunning.value = true
+  genError.value = ''
+  genResult.value = null
+  genSchedMsg.value = ''
+  try {
+    const payload = {
+      userIntent: strategyInput.value,
+      postsPerDay: genPostsPerDay.value || 1,
+      mode: 'auto',
+      withImages: !!genImages.value,
+      imageTier: imgForm.value.tier === 'fine' ? 'fine' : 'standard',
+      imageRatio: imgForm.value.ratio || '1:1',
+      dryRun: false,
+    }
+    if (genScheduleOn.value) payload.schedule = { startDate: genScheduleDate.value, time: genScheduleTime.value }
+    const r = await api.generate(payload)
+    genResult.value = r
+    if (r.scheduled) {
+      genSchedMsg.value = `已排期 ${r.scheduledOk || 0}/${r.scheduled.length} 条`
+        + (r.scheduled.length - (r.scheduledOk || 0) > 0
+          ? '（失败：' + r.scheduled.filter((x) => !x.ok).map((x) => x.error).slice(0, 2).join('；') + '）'
+          : '')
+    }
+    if (r.images) {
+      genSchedMsg.value += `${genSchedMsg.value ? '　·　' : ''}配图 ${r.imagesOk || 0} 张成功 / ${r.imagesFailed || 0} 张失败`
+    }
+    showNotice(`已生成 ${r.saved} 条草稿（${r.elapsed}s）`)
+    await loadContents()
+  } catch (e) {
+    genError.value = '生成失败：' + (e.message || '未知错误')
+  } finally {
+    genRunning.value = false
+  }
+}
+
+// 收藏（书签）：收藏后永久保留，不参与 7 天自动清理
+async function toggleFavorite(item) {
+  favoriteBusy.value = item.id
+  try {
+    await api.updateContent(item.id, { favorite: item.favorite ? 0 : 1 })
+    showNotice(item.favorite ? '已取消收藏，重新计入 7 天清理' : '已收藏 · 永久保留')
+    await loadContents()
+  } catch (e) {
+    showNotice('操作失败：' + (e.message || ''))
+  } finally {
+    favoriteBusy.value = null
+  }
+}
+
+// 单条排期：选一天 → 加入发布队列（走真实 /api/publish/schedule）
+async function schedulePoolItem(item) {
+  const at = schedPicker.value[item.id]
+  if (!at) { showNotice('先选一个发送时间'); return }
+  schedItemBusy.value = item.id
+  try {
+    await api.schedulePublish({ contentId: item.id, scheduledAt: at })
+    showNotice('已加入发布队列，去「排期发布」查看')
+    schedPicker.value[item.id] = ''
+    await loadContents()
+  } catch (e) {
+    showNotice('排期失败：' + (e.message || ''))
+  } finally {
+    schedItemBusy.value = null
+  }
+}
+
+// 默认排期时间：明天 19:30（黄金档），让「排期」按钮开箱可用
+function defaultScheduleAt() {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T19:30`
+}
+
+onMounted(() => {
+  const d = defaultScheduleAt()
+  genScheduleDate.value = d.slice(0, 10)
+})
+
 onBeforeUnmount(() => {
   window.clearTimeout(generationTimer)
   window.clearTimeout(noticeTimer)
@@ -1366,64 +1872,144 @@ onBeforeUnmount(() => {
 <template>
   <section class="module-view">
     <template v-if="props.activeView === 'studio'">
-      <div class="module-toolbar panel">
-        <div><span class="section-label">生成方案</span><h2>一周内容批量创作</h2><p>先锁定连续大纲，再生成 {{ genDays * genPostsPerDay }} 条可逐篇编辑的内容。</p></div>
-        <div class="config-pills" aria-label="生成配置">
-          <span><b>{{ genDays }}</b> 天</span><span><b>{{ genPostsPerDay }}</b> 条/天</span><span>共 <b>{{ genDays * genPostsPerDay }}</b> 条</span>
-        </div>
-        <ElButton class="module-primary" type="primary" round :loading="genRunning" @click="runGenerate">
-          <Sparkles :size="16" />{{ genRunning ? '正在生成...' : `重新生成 ${genDays} 天草稿` }}
-        </ElButton>
-      </div>
+      <!-- R19：统一生成入口（左） + 独立生图（右）—— 原「生成方案 / AI GENERATION / 顶栏生成」三处入口已合并为一处 -->
+      <div class="studio-split">
+        <div class="studio-left">
+          <div class="module-toolbar panel" style="grid-template-columns:minmax(0,1fr) auto">
+            <div>
+              <span class="section-label">AI GENERATION</span>
+              <h2>内容生成</h2>
+              <p>{{ genModeLabel }}　·　参考系加权：<b>你的指定 0.45</b> &gt; 运营计划表 0.25 &gt; 历史好文 0.20 &gt; 行业热榜 0.10</p>
+            </div>
+            <span :class="['studio-ai-state', aiReady === false ? 'bad' : 'ok']">
+              {{ aiReady === null ? '检测中…' : (aiReady ? 'AI 已就绪' : 'AI 未配置') }}
+            </span>
+          </div>
 
-      <div v-if="generating || generationDone" :class="['generation-strip', { done: generationDone }]" aria-live="polite">
-        <span class="generation-orb"><RefreshCw v-if="generating" :size="16" /><Check v-else :size="16" /></span>
-        <div><b>{{ generating ? 'AI 正在沿大纲创作' : '7 天草稿已生成' }}</b><small>{{ generating ? '匹配热点 → 生成文案 → 文案库查重 → 安排配图' : '7 条内容全部低于 60% 相似度，可逐篇编辑。' }}</small></div>
-      </div>
+          <div class="panel studio-form">
+            <label class="studio-field">
+              <span>这次想说什么方向？（权重最高，可留空 = 跟运营计划表走）</span>
+              <textarea v-model="strategyInput" rows="3" placeholder="例：这周主推新手化妆体验课，语气亲切像学姐；不要硬广"></textarea>
+            </label>
 
-      <!-- ===== AI 内容生成（策略输入 + 7天窗口）===== -->
-      <div class="module-toolbar panel">
-        <div><span class="section-label">AI GENERATION</span><h2>生成内容 · 7 天窗口</h2><p>四参考系加权：<b>你的指定 0.45</b> &gt; 运营计划表 0.25 &gt; 历史好文 0.20 &gt; 行业热榜 0.10</p></div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <span v-if="aiReady === false" style="font-size:12px;color:#b4544a">AI 未配置</span>
-          <span v-else-if="aiReady" style="font-size:12px;color:#5a8a6a">AI 已就绪</span>
+            <div class="studio-opts">
+              <label class="check-line"><input type="checkbox" v-model="genImages" /> 一起生图（生成文章时按内容自动配图，不用手写提示词）</label>
+              <label class="check-line"><input type="checkbox" v-model="genScheduleOn" /> 生成后直接排期</label>
+              <label class="check-line mini">每天 <input type="number" v-model.number="genPostsPerDay" min="1" max="9" /> 条</label>
+              <template v-if="genScheduleOn">
+                <span class="studio-inline">从 <input type="date" v-model="genScheduleDate" /> 起</span>
+                <span class="studio-inline">每天 <input type="time" v-model="genScheduleTime" /> 发送</span>
+              </template>
+            </div>
+
+            <div class="studio-actions">
+              <button class="outline-button" type="button" :disabled="genRunning || aiReady === false" @click="runGenerateUnified">
+                <Sparkles :size="15" />{{ genRunning ? '生成中…（约 10–60 秒）' : '开始生成' }}
+              </button>
+              <small>{{ genModePreview === 'seven' ? '首次生成会一次产出 7 天（沿七天叙事）' : '已有内容，本次只生成 1 篇（承接上一篇）' }}<template v-if="genImages">；并按内容自动配图</template></small>
+            </div>
+          </div>
+
+          <p v-if="genError" class="panel studio-msg err">{{ genError }}</p>
+          <div v-if="genResult" class="panel studio-msg">
+            <b>本次主线：{{ genResult.theme || '—' }}</b>
+            <small>已生成 {{ genResult.saved }} 条（{{ genResult.elapsed }} 秒 · {{ (genResult.usage || {}).total_tokens || 0 }} tokens）<template v-if="genSchedMsg">　·　{{ genSchedMsg }}</template></small>
+          </div>
         </div>
-      </div>
-      <div class="panel" style="padding:16px 18px;margin-bottom:14px">
-        <label style="display:flex;flex-direction:column;gap:7px;font-size:12px;color:#8b8175">这次想说什么方向？（权重最高，可留空=跟运营计划表走）
-          <textarea v-model="strategyInput" rows="2" placeholder="例：这周主推新手化妆体验课，语气亲切像学姐；不要硬广" style="padding:10px 12px;border:1px solid #e3dcd2;border-radius:10px;font-size:13px;resize:vertical;font-family:inherit"></textarea>
-        </label>
-        <div style="display:flex;gap:14px;align-items:end;margin-top:14px;flex-wrap:wrap">
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px">生成
-            <input v-model.number="genDays" type="number" min="1" max="14" style="width:56px;padding:7px 8px;border:1px solid #e3dcd2;border-radius:8px;text-align:center" /> 天
+
+        <!-- 独立生图：与文章生成互不依赖（R19 从「素材灵感」迁到这里） -->
+        <aside class="panel studio-img">
+          <div class="panel-head">
+            <div><span class="section-label">AI IMAGE GEN</span><h3>单独生图</h3></div>
+            <span class="studio-img-note">产物自动进素材库</span>
+          </div>
+          <label class="studio-field"><span>要什么图（一句话）</span>
+            <input v-model="imgForm.prompt" placeholder="例：美容院海报配图，一位女性在护理" />
           </label>
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px">每天
-            <input v-model.number="genPostsPerDay" type="number" min="1" max="9" style="width:56px;padding:7px 8px;border:1px solid #e3dcd2;border-radius:8px;text-align:center" /> 条
-          </label>
-          <span style="font-size:12px;color:#8b8175">共 {{ genDays * genPostsPerDay }} 条</span>
-          <button class="outline-button" type="button" :disabled="genRunning || aiReady === false" @click="runGenerate">
-            <Sparkles :size="15" />{{ genRunning ? '生成中…（约 10–60 秒）' : '开始生成' }}
-          </button>
-        </div>
-      </div>
-      <p v-if="genError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ genError }}</p>
-      <div v-if="genResult" class="panel" style="padding:14px 18px;margin:0 0 16px">
-        <b>本次主线：{{ genResult.theme }}</b>
-        <p style="margin:6px 0 0;font-size:12px;color:#8b8175">已生成 {{ genResult.saved }} 条草稿（{{ genResult.elapsed }} 秒，{{ (genResult.usage||{}).total_tokens }} tokens），可在下方查看与编辑。</p>
+          <div class="studio-img-opts">
+            <label>档位
+              <select v-model="imgForm.tier">
+                <option value="standard">标准档（2K）</option>
+                <option value="fine">精细档（4K）</option>
+              </select>
+            </label>
+            <label>比例
+              <select v-model="imgForm.ratio">
+                <option v-for="r in ['1:1','2:3','3:4','4:3','3:2','9:16','16:9','4:5']" :key="'r' + r" :value="r">{{ r }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="studio-actions">
+            <button class="outline-button" type="button" :disabled="imgExpanding" @click="expandImgPrompt">{{ imgExpanding ? '扩写中…' : '先扩写提示词' }}</button>
+            <button class="outline-button" type="button" :disabled="imgBusy" @click="runImgGen">{{ imgBusy ? '出图中…（约1分钟）' : '生成图片' }}</button>
+          </div>
+          <p v-if="imgError" class="studio-msg err">{{ imgError }}</p>
+          <div v-if="imgExpanded" class="studio-expanded"><b>实际发给模型的提示词</b>{{ imgExpanded }}</div>
+          <div v-if="imgResult" class="studio-img-result">
+            <img :src="imgProxy(imgResult.url)" alt="" />
+            <small>{{ imgResult.tierName }}（{{ imgResult.imageSize }}）· {{ imgResult.ratio }} · 合计 {{ (imgResult.spentMsTotal / 1000).toFixed(1) }}s · 素材 #{{ imgResult.assetId }}</small>
+          </div>
+          <div v-if="imgHistory.length > 1" class="studio-img-history">
+            <img v-for="(g, i) in imgHistory.slice(0, 6)" :key="'gh' + i" :src="imgProxy(g.url)" alt="" />
+          </div>
+        </aside>
       </div>
 
-      <!-- ===== 行业热榜（定时抓取 + 手动触发）===== -->
+      <!-- R19：待发送内容池（生成但还没发出去）—— 7 天未排期自动清理，收藏后永久保留 -->
+      <div class="panel pool-panel">
+        <div class="panel-head">
+          <div>
+            <span class="section-label">PENDING POOL</span>
+            <h3>待发送内容 · {{ poolRows.length }} 条</h3>
+            <p class="pool-note">生成但还没发出的内容。未排期的草稿从生成起 <b>7 天自动清理</b>；<b>收藏后永久保留</b>。</p>
+          </div>
+          <button class="outline-button" type="button" @click="scanAllDrafts"><RefreshCw :size="15" />全部草稿查重</button>
+        </div>
+        <p v-if="!poolRows.length" class="pool-empty">还没有待发送内容 —— 用上面的生成入口产出第一条。</p>
+        <div v-else class="week-content-grid pool-grid">
+          <article v-for="(item, index) in poolRows" :key="'pool' + item.id" class="content-draft panel">
+            <div class="draft-cover" :class="`draft-tone-${index % 4}`">
+              <span>{{ item.date }}</span>
+              <svg viewBox="0 0 180 130" aria-hidden="true"><circle cx="104" cy="48" r="34" /><path d="M61 126c10-35 37-53 76-48 20 3 34 19 42 48M88 45c12-15 37-13 45 8M98 58c9 5 18 4 26-2" /></svg>
+              <small>{{ item.source === 'generated' ? 'AI 生成' : '历史笔记' }}</small>
+            </div>
+            <div class="draft-body">
+              <span class="draft-state">
+                {{ item.state }} · {{ item.imageCount }} 张配图 ·
+                <b v-if="item.favorite" class="keep-flag">已收藏 · 永久保留</b>
+                <b v-else-if="item.scheduled" class="keep-flag">已排期 · 不清理</b>
+                <b v-else class="expire-flag">剩余 {{ item.remainDays }} 天自动清理</b>
+              </span>
+              <h3>{{ item.title }}</h3>
+              <div class="pool-actions">
+                <span class="pass-text" :style="item.dupScore !== null && item.dupScore >= 60 ? 'color:#b4544a' : ''">
+                  <LockKeyhole :size="13" /> {{ item.dupScore === null ? '未查重' : '相似 ' + item.dupScore + '%' }}
+                </span>
+                <button type="button" @click="openEditor(item)">编辑 <ChevronRight :size="14" /></button>
+                <button type="button" v-if="item.status === 'draft'" style="color:#5a8a6a" @click="saveEditById(item.id, 'approved')">通过</button>
+                <button type="button" v-if="item.status === 'draft'" style="color:#b4544a" @click="saveEditById(item.id, 'rejected')">退回</button>
+                <button type="button" :disabled="favoriteBusy === item.id" @click="toggleFavorite(item)">{{ item.favorite ? '取消收藏' : '收藏' }}</button>
+              </div>
+              <div class="pool-sched">
+                <input type="datetime-local" v-model="schedPicker[item.id]" />
+                <button type="button" :disabled="schedItemBusy === item.id" @click="schedulePoolItem(item)">{{ schedItemBusy === item.id ? '排期中…' : '排到这天发' }}</button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <!-- R19：行业热榜 —— 挪到「待发送内容」下面 -->
       <div class="module-toolbar panel">
         <div><span class="section-label">TREND RADAR</span><h2>行业热榜 · 真实爆款</h2><p>每天 09:30 / 20:30 自动抓取（<b>{{ trendTotal }}</b> 条已入库{{ trendLast ? '，最近 ' + trendLast : '' }}），生成内容时作为热点参考。</p></div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:#8b8175">关键词：{{ trendKeywords.join(' / ') || '—' }}</span>
-          <button class="outline-button" type="button" @click="scanAllDrafts"><RefreshCw :size="15" />全部草稿查重</button>
           <button class="outline-button" type="button" :disabled="trendScraping" @click="runScrapeNow"><RefreshCw :size="15" />{{ trendScraping ? '抓取中…（约 30 秒）' : '立即抓取' }}</button>
         </div>
       </div>
-      <p v-if="trendError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ trendError }}</p>
-      <p v-else-if="trendLoading" class="panel" style="padding:12px 16px;margin:0 0 12px">正在读取热榜…</p>
-      <div v-if="trendItems.length" class="asset-grid" style="margin-bottom:18px">
+      <p v-if="trendError" class="panel" style="padding:12px 16px">{{ trendError }}</p>
+      <p v-else-if="trendLoading" class="panel" style="padding:12px 16px">正在读取热榜…</p>
+      <div v-if="trendItems.length" class="asset-grid" style="margin-bottom:4px">
         <a v-for="it in trendItems.slice(0, 8)" :key="'tr-' + it.id" class="asset-card panel" :href="it.url" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
           <span class="asset-art" style="background:#f4efe8;overflow:hidden;display:block">
             <img v-if="it.cover" :src="imgProxy(it.cover)" alt="" style="width:100%;height:100%;object-fit:cover" referrerpolicy="no-referrer" />
@@ -1431,29 +2017,7 @@ onBeforeUnmount(() => {
           <span class="asset-copy"><small>{{ it.author || '小红书' }} · 👍 {{ it.liked }} · {{ it.keyword }}</small><b>{{ it.title || '（无标题）' }}</b><em>点击看原帖</em></span>
         </a>
       </div>
-      <p v-else-if="!trendLoading" class="panel" style="padding:14px 16px;margin:0 0 18px">热榜还是空的 —— 点右上角「立即抓取」，或等每天 09:30 / 20:30 自动抓取。</p>
-
-      <div class="week-content-grid">
-        <article v-for="(item, index) in weeklyContents" :key="item.day" class="content-draft panel">
-          <div class="draft-cover" :class="`draft-tone-${index % 4}`">
-            <span>{{ item.day }}</span>
-            <svg viewBox="0 0 180 130" aria-hidden="true"><circle cx="104" cy="48" r="34" /><path d="M61 126c10-35 37-53 76-48 20 3 34 19 42 48M88 45c12-15 37-13 45 8M98 58c9 5 18 4 26-2" /></svg>
-            <small>{{ item.stage }}</small>
-          </div>
-          <div class="draft-body">
-            <span class="draft-state">{{ item.date }} · {{ item.state }}</span>
-            <h3>{{ item.title }}</h3>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <span class="pass-text" :style="item.similarity !== null && item.similarity >= 60 ? 'color:#b4544a' : ''">
-                <LockKeyhole :size="13" /> {{ item.similarity === null ? '未查重' : '相似 ' + item.similarity + '%' }}
-              </span>
-              <button type="button" @click="openEditor(item)">编辑内容 <ChevronRight :size="14" /></button>
-              <button type="button" v-if="item.id && item.rawStatus === 'draft'" @click="saveEditById(item.id, 'approved')" style="color:#5a8a6a">通过</button>
-              <button type="button" v-if="item.id && item.rawStatus === 'draft'" @click="saveEditById(item.id, 'rejected')" style="color:#b4544a">退回</button>
-            </div>
-          </div>
-        </article>
-      </div>
+      <p v-else-if="!trendLoading" class="panel" style="padding:14px 16px">热榜还是空的 —— 点右上角「立即抓取」，或等每天 09:30 / 20:30 自动抓取。</p>
 
       <!-- ===== 文案编辑器 ===== -->
       <div v-if="editorOpen" class="preview-layer" style="position:fixed;inset:0;background:rgba(40,34,28,.42);z-index:60;display:flex;align-items:center;justify-content:center;padding:24px" @click.self="closeEditor">
@@ -1498,87 +2062,158 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <template v-else-if="props.activeView === 'schedule'">
+        <template v-else-if="props.activeView === 'schedule'">
       <div class="schedule-summary">
         <article class="queue-card panel">
           <span class="queue-icon"><CalendarCheck :size="21" /></span>
           <div><span class="section-label">发布队列</span><strong>{{ pubTasks.filter(t => t.status === 'pending').length }} 条待发布</strong>
-          <small>已发布 {{ pubTasks.filter(t => t.status === 'done').length }} · 失败 {{ pubTasks.filter(t => t.status === 'failed').length }}</small></div>
+          <small>待确认 {{ pubTasks.filter(t => t.status === 'awaiting_confirm').length }} · 已发布 {{ pubTasks.filter(t => t.status === 'done').length }} · 失败 {{ pubTasks.filter(t => t.status === 'failed').length }}</small></div>
         </article>
         <article class="auto-card panel">
-          <div><span class="section-label">自动发布调度</span><strong>{{ schedText }}</strong><small>{{ schedDetail }}</small></div>
-          <button type="button" :class="['switch-control', { active: sched.enabled }]" :aria-pressed="sched.enabled"
-                  :disabled="schedSaving || schedLoading || !!schedError" aria-label="自动发布调度开关"
-                  @click="toggleScheduler"><i /></button>
+          <div><span class="section-label">自动发送</span><strong>{{ pubSet.autoSend ? '开 · 到点直接发' : '关 · 到点需手动确认' }}</strong>
+          <small>{{ pubSet.autoSend ? '无需询问，系统到点直接发送' : '到点先转「待确认」，你点确认后才发送' }}</small></div>
+          <button type="button" :class="['switch-control', { active: pubSet.autoSend }]" :aria-pressed="pubSet.autoSend"
+                  :disabled="pubSetSaving" aria-label="自动发送开关" @click="togglePubSet('autoSend')"><i /></button>
         </article>
-        <article class="safe-card panel"><ShieldCheck :size="22" /><div><strong>发布保护</strong><small>登录态 · 查重 · 配图 · 正文 · 发布间隔，五项全过才发送</small></div></article>
+        <article class="auto-card panel">
+          <div><span class="section-label">发布保护</span><strong>{{ pubSet.protect ? '开 · 五项预检全过才发' : '关 · 跳过预检直接发' }}</strong>
+          <small>{{ pubSet.protect ? '发布前 15 分钟自动预检：登录态/查重/配图/正文字数/发布间隔' : '已关闭保护：不会拦截，直接进入发送流程' }}</small></div>
+          <button type="button" :class="['switch-control', { active: pubSet.protect }]" :aria-pressed="pubSet.protect"
+                  :disabled="pubSetSaving" aria-label="发布保护开关" @click="togglePubSet('protect')"><i /></button>
+        </article>
       </div>
+      <p v-if="pubSetError" class="panel" style="padding:12px 16px">{{ pubSetError }}</p>
+      <p v-if="!pubSet.autoSend && pubTasks.some(t => t.status === 'awaiting_confirm')" class="panel"
+         style="padding:12px 16px;border-color:#e0b9a0">
+        ⏰ 有 {{ pubTasks.filter(t => t.status === 'awaiting_confirm').length }} 条已到点、等你确认发送 —— 在下面周视图里点开「确认发送」。
+      </p>
 
-      <!-- 建议发布时间 -->
+      <!-- 建议发布时间：默认按运营策略走，想自己定再点「手动调整」 -->
       <div class="module-toolbar panel">
-        <div><span class="section-label">BEST TIME</span><h2>建议发布时间：{{ bestTime ? bestTime.recommended : '读取中…' }}</h2>
-        <p>{{ bestTime ? bestTime.note : '' }}</p></div>
-        <div style="display:flex;gap:10px;align-items:center">
-          <button class="outline-button" type="button" @click="useBestTime">采用建议</button>
-          <button class="outline-button" type="button" @click="loadPublish(true)">刷新</button>
+        <div><span class="section-label">BEST TIME</span>
+          <h2>建议发布时间：{{ bestTime ? bestTime.recommended : '读取中…' }}</h2>
+          <p>{{ bestTime ? bestTime.note : '默认按运营策略走，无需手动设置' }}</p>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="outline-button" type="button" @click="manualTimeOpen = !manualTimeOpen">{{ manualTimeOpen ? '收起手动设置' : '手动调整' }}</button>
+          <button class="outline-button" type="button" @click="loadPublish(true)"><RefreshCw :size="15" />刷新</button>
         </div>
       </div>
-      <div v-if="bestTime && bestTime.reasons.length" class="panel" style="padding:14px 18px;margin-bottom:16px">
-        <b style="font-size:13px">依据</b>
-        <ul style="margin:8px 0 0;padding-left:20px;font-size:12px;color:#8b8175;line-height:1.9">
-          <li v-for="(r, i) in bestTime.reasons" :key="'bt' + i">{{ r }}</li>
-        </ul>
-        <p style="margin:10px 0 0;font-size:12px;color:#8b8175">行业参考时段：
-          <span v-for="s in bestTime.slots" :key="s.time" style="margin-right:12px">{{ s.label }} {{ s.time }}（{{ s.suitable }}）</span>
-        </p>
-      </div>
-
-      <!-- 排期表单 -->
-      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
-        <b style="font-size:13px">把内容加入发布队列</b>
+      <div v-if="manualTimeOpen" class="panel" style="padding:16px 18px;margin-bottom:0">
+        <b style="font-size:13px">手动调整：把内容排到指定日期与时间</b>
+        <p style="margin:6px 0 0;font-size:11px;color:#8b8175">不点这里的话，系统就按上面的建议时间（运营策略）走。</p>
         <div style="display:flex;gap:12px;align-items:end;margin-top:12px;flex-wrap:wrap">
           <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:#8b8175;flex:1;min-width:240px">选择内容
-            <select v-model="scheduleForm.contentId" style="padding:9px 11px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px;background:#fff">
+            <select v-model="scheduleForm.contentId" style="padding:9px 11px;border:1px solid var(--border);border-radius:9px;font-size:13px;background:#fff">
               <option value="">— 请选择 —</option>
-              <option v-for="c in weeklyContents" :key="'opt' + c.id" :value="c.id">D{{ c.day.replace('D','') }} {{ c.title }}（{{ c.state }}）</option>
+              <option v-for="c in poolRows" :key="'opt' + c.id" :value="c.id">{{ c.title }}（{{ c.state }}）</option>
             </select>
           </label>
           <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:#8b8175">发布时间
-            <input v-model="scheduleForm.scheduledAt" type="datetime-local" style="padding:9px 11px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px" />
+            <input v-model="scheduleForm.scheduledAt" type="datetime-local" style="padding:9px 11px;border:1px solid var(--border);border-radius:9px;font-size:13px" />
           </label>
+          <button class="outline-button" type="button" @click="useBestTime">采用建议</button>
           <button class="outline-button" type="button" :disabled="scheduleSaving" @click="doSchedule">{{ scheduleSaving ? '加入中…' : '加入队列' }}</button>
         </div>
       </div>
 
-      <p v-if="pubError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ pubError }}</p>
+      <p v-if="pubError" class="panel" style="padding:12px 16px">{{ pubError }}</p>
 
-      <!-- 发布队列 -->
+      <!-- 发布队列：周视图 -->
       <div class="calendar-board panel">
-        <div class="panel-head"><div><span class="section-label">PUBLISH QUEUE</span><h3>发布队列</h3></div><span class="demo-badge">{{ pubTasks.length }} 个任务</span></div>
-        <div v-if="!pubTasks.length && !pubLoading" style="padding:22px 6px;color:#8b8175;font-size:13px">队列是空的 —— 用上面的表单把内容加进来。</div>
-        <div class="queue-list">
-          <article v-for="item in pubTasks" :key="'pt' + item.id" class="queue-row" style="align-items:center">
-            <div class="queue-date"><b>{{ (item.scheduled_at || '').slice(5, 10) }}</b><small>{{ (item.scheduled_at || '').slice(11, 16) }}</small></div>
-            <div class="queue-copy"><b>{{ item.content_title || '(内容已删除)' }}</b><small>任务 #{{ item.id }}{{ item.retry ? ' · 重试 ' + item.retry : '' }}{{ item.note_id ? ' · 笔记 ' + item.note_id : '' }}</small></div>
-            <span :class="['queue-state', { waiting: item.status === 'pending' }]">{{ PUB_STATE[item.status] || item.status }}</span>
-            <div style="display:flex;gap:6px">
-              <button type="button" v-if="item.status === 'pending' || item.status === 'failed'" @click="publishNow(item)" :disabled="pubRunning === item.id">{{ pubRunning === item.id ? '…' : '立即发布' }}</button>
-              <button type="button" v-if="item.status === 'pending'" @click="cancelPubTask(item.id)">取消</button>
-              <button type="button" @click="runPrecheck(item.content_id)">预检</button>
+        <div class="panel-head">
+          <div><span class="section-label">PUBLISH WEEK</span><h3>发布队列 · 周视图</h3>
+            <p class="pool-note">点日期看当天要发的文章；点文章横条向下展开（左：内容 / 右：小红书手机预览）。</p>
+          </div>
+          <span class="demo-badge">{{ pubTasks.length }} 个任务</span>
+        </div>
+
+        <div class="week-tabs">
+          <button v-for="d in weekDays" :key="d.iso" type="button" :class="{ active: d.iso === weekSelected, today: d.isToday }" @click="weekSelected = d.iso">
+            <b>{{ d.label }}</b>
+            <small>{{ d.md }}</small>
+            <i v-if="d.count">{{ d.count }} 条</i>
+          </button>
+        </div>
+
+        <div v-if="!weekTasks.length" class="pool-empty">这一天没有发布任务 —— 用上面的「手动调整」把内容排进来。</div>
+
+        <div class="week-list">
+          <article v-for="t in weekTasks" :key="'wk' + t.id" :class="['week-row', { open: expandedTask === t.id }]">
+            <button type="button" class="week-row-head" @click="toggleTask(t)">
+              <span class="week-time"><b>{{ hhmm(t.scheduled_at) }}</b><small>{{ t.status === 'done' ? '已发' : '计划' }}</small></span>
+              <span class="week-copy">
+                <b>{{ t.content_title || '(内容已删除)' }}</b>
+                <small>任务 #{{ t.id }}{{ t.retry ? ' · 重试 ' + t.retry : '' }} · 实际发送：{{ t.actual_sent_at ? fmtSent(t.actual_sent_at) : '未发送' }}</small>
+              </span>
+              <span :class="['queue-state', { waiting: t.status === 'pending' || t.status === 'awaiting_confirm' }]">{{ PUB_STATE[t.status] || t.status }}</span>
+              <ChevronRight :size="16" class="week-caret" />
+            </button>
+
+            <div v-if="expandedTask === t.id" class="week-expand">
+              <!-- 左：文章内容（点「编辑」可改，改完点「保存」落库） -->
+              <section class="week-article">
+                <template v-if="editingTask === t.id">
+                  <input v-model="taskEdit[t.id].title" class="week-input" placeholder="标题" />
+                  <textarea v-model="taskEdit[t.id].body" rows="10" class="week-input"></textarea>
+                  <input v-model="taskEdit[t.id].tagsText" class="week-input" placeholder="话题标签（空格分隔）" />
+                </template>
+                <template v-else>
+                  <h4>{{ t.content_title || '(无标题)' }}</h4>
+                  <p class="week-body">{{ t.content_body || '（这条内容没有正文）' }}</p>
+                  <p class="week-tags">{{ taskTags(t) }}</p>
+                </template>
+                <div class="week-imgs">
+                  <img v-for="(im, i) in taskImages(t)" :key="'im' + t.id + i" :src="imgProxy(im.url)" alt="" />
+                  <span v-if="!taskImages(t).length" class="week-noimg">这条内容还没有配图</span>
+                </div>
+              </section>
+
+              <!-- 右：小红书真机预览 -->
+              <aside class="week-phone">
+                <div class="phone-frame">
+                  <div class="phone-cover">
+                    <img v-if="taskImages(t)[0]" :src="imgProxy(taskImages(t)[0].url)" alt="" />
+                    <span v-else>无封面图</span>
+                  </div>
+                  <div class="phone-head">
+                    <span class="phone-avatar">{{ (t.content_title || 'J').slice(0, 1) }}</span>
+                    <b>JOIB</b>
+                    <small>刚刚</small>
+                  </div>
+                  <h5>{{ (editingTask === t.id ? taskEdit[t.id].title : t.content_title) || '(无标题)' }}</h5>
+                  <p class="phone-text">{{ (editingTask === t.id ? taskEdit[t.id].body : t.content_body) || '（无正文）' }}</p>
+                  <p class="phone-tags">{{ editingTask === t.id ? taskEdit[t.id].tagsText : taskTags(t) }}</p>
+                </div>
+                <small class="week-phone-note">模拟小红书笔记页（真机里长这样）</small>
+              </aside>
+
+              <!-- 按钮 -->
+              <div class="week-actions">
+                <button type="button" class="outline-button" @click="precheckTask(t)">预检</button>
+                <button type="button" class="outline-button" v-if="editingTask !== t.id" @click="startEditTask(t)">编辑</button>
+                <button type="button" class="outline-button" v-else :disabled="taskSaving === t.id" @click="saveTaskContent(t)">{{ taskSaving === t.id ? '保存中…' : '保存' }}</button>
+                <button type="button" class="outline-button" v-if="t.status === 'awaiting_confirm'" @click="confirmPubTask(t)">确认发送</button>
+                <button type="button" class="outline-button" v-if="t.status === 'pending'" @click="cancelPubTask(t.id)">取消</button>
+              </div>
+
+              <!-- 预检结果：手机预览下面的独立框 -->
+              <div v-if="precheckForId === t.id" class="precheck-box">
+                <template v-if="precheckResult">
+                  <b :style="precheckResult.pass ? 'color:#5a8a6a' : 'color:#b4544a'">{{ precheckResult.pass ? '✅ 预检全部通过' : '⚠️ 预检未通过' }}</b>
+                  <ul>
+                    <li v-for="(it, i) in precheckResult.items" :key="'pc' + i" :style="it.ok ? 'color:#5a8a6a' : 'color:#b4544a'">{{ it.ok ? '✓' : '✗' }} {{ it.name }}：{{ it.detail }}</li>
+                  </ul>
+                </template>
+                <template v-else><b>正在预检…</b></template>
+              </div>
             </div>
           </article>
         </div>
-        <div v-if="precheckResult" class="panel" style="padding:14px 16px;margin-top:14px;background:#faf7f3;border-radius:10px">
-          <b :style="precheckResult.pass ? 'color:#5a8a6a' : 'color:#b4544a'">{{ precheckResult.pass ? '✅ 预检全部通过' : '⚠️ 预检未通过' }}</b>
-          <ul style="margin:8px 0 0;padding-left:18px;font-size:12px;line-height:1.9">
-            <li v-for="(it, i) in precheckResult.items" :key="'pc' + i" :style="it.ok ? 'color:#5a8a6a' : 'color:#b4544a'">{{ it.ok ? '✓' : '✗' }} {{ it.name }}：{{ it.detail }}</li>
-          </ul>
-        </div>
-        <div v-if="precheckFor" style="margin-top:8px"><small style="color:#8b8175">最近预检内容 ID：{{ precheckFor }}</small></div>
       </div>
     </template>
 
-    <template v-else-if="props.activeView === 'assets'">
+<template v-else-if="props.activeView === 'assets'">
       <div class="asset-toolbar panel">
         <div><span class="section-label">素材中心</span><h2>灵感与配图</h2><p>AI 生成图、机构实拍和历史素材统一管理。</p></div>
         <div class="filter-tabs">
@@ -1614,58 +2249,7 @@ onBeforeUnmount(() => {
           <ElButton class="module-primary" type="primary" round :disabled="!selectedAssets.length" @click="attachSelected">加入 D3 内容</ElButton>
         </aside>
       </div>
-
-      <!-- ===== AI 生图两档（R15）===== -->
-      <article class="module-toolbar panel" style="margin-top:16px">
-        <div><span class="section-label">AI IMAGE GEN</span><h2>AI 生图（两档）</h2>
-        <p>提示词一律先经 DeepSeek 扩写再出图（避免直出原始提示词）；产物自动进素材库</p></div>
-      </article>
-
-      <div class="panel" style="padding:16px 18px;margin-bottom:16px">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
-          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175;flex:1;min-width:240px">需求（一句话即可）
-            <input v-model="imgForm.prompt" placeholder="例：美容院海报配图，一位女性在护理" style="padding:9px 11px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px" />
-          </label>
-          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175">档位
-            <select v-model="imgForm.tier" style="padding:8px 10px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px;background:#fff">
-              <option value="standard">标准档（2K，快）</option>
-              <option value="fine">精细档（4K，细节好）</option>
-            </select>
-          </label>
-          <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:#8b8175">比例
-            <select v-model="imgForm.ratio" style="padding:8px 10px;border:1px solid #e3dcd2;border-radius:9px;font-size:13px;background:#fff">
-              <option v-for="r in ['1:1','2:3','3:4','4:3','3:2','9:16','16:9','4:5']" :key="'r'+r" :value="r">{{ r }}</option>
-            </select>
-          </label>
-          <button class="outline-button" type="button" :disabled="imgExpanding" @click="expandImgPrompt">{{ imgExpanding ? '扩写中…' : '先扩写提示词' }}</button>
-          <button class="outline-button" type="button" :disabled="imgBusy" @click="runImgGen">{{ imgBusy ? '出图中…（约1分钟）' : '生成图片' }}</button>
-        </div>
-
-        <div v-if="imgExpanded" style="margin-top:12px;padding:10px 12px;background:#faf7f3;border-radius:10px;font-size:12px;line-height:1.8">
-          <b>扩写后提示词（实际发给模型的就是这段）：</b><br />{{ imgExpanded }}
-        </div>
-        <p v-if="imgError" style="margin:10px 0 0;color:#b4544a;font-size:13px">{{ imgError }}</p>
-      </div>
-
-      <div v-if="imgResult" class="panel" style="padding:16px 18px;margin-bottom:16px">
-        <b style="font-size:13px">本次出图结果</b>
-        <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
-          <img :src="imgProxy(imgResult.url)" alt="" style="width:220px;border-radius:10px" />
-          <div style="font-size:12px;line-height:1.9">
-            档位：{{ imgResult.tierName }}（{{ imgResult.imageSize }}）｜比例 {{ imgResult.ratio }}<br />
-            扩写耗时 {{ (imgResult.spentMsExpand/1000).toFixed(1) }}s ｜ 生图耗时 {{ (imgResult.callMs/1000).toFixed(1) }}s ｜ 合计 {{ (imgResult.spentMsTotal/1000).toFixed(1) }}s<br />
-            已入素材库：#{{ imgResult.assetId }}<br />
-            <span style="color:#8b8175">原始需求：{{ imgResult.promptRaw }}</span>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="imgHistory.length > 1" class="panel" style="padding:14px 18px;margin-bottom:16px">
-        <b style="font-size:12px">本次会话历史（{{ imgHistory.length }} 张）</b>
-        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
-          <img v-for="(g,i) in imgHistory.slice(0,10)" :key="'gh'+i" :src="imgProxy(g.url)" style="width:88px;height:88px;object-fit:cover;border-radius:8px" />
-        </div>
-      </div>
+      <!-- R19：AI 生图入口已统一到「内容工坊」右侧单独生图面板（本页只保留素材库：上传 / 管理 / 删除） -->
     </template>
 
     <template v-else-if="props.activeView === 'analytics'">
@@ -1940,6 +2524,94 @@ onBeforeUnmount(() => {
     </template>
 
     <template v-else-if="props.activeView === 'outline'">
+      <!-- ===================== R22 运营大纲：三板块 + 完整策略 + AI 对话 ===================== -->
+      <div class="module-toolbar panel">
+        <div><span class="section-label">STRATEGY</span><h2>运营策略</h2>
+          <p>AI 生成初稿 → 你可以直接改；也可以跟 AI 对话，让它**真实改这份策略**（改完下面的内容会变）。</p></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="outline-button" type="button" :disabled="strategyBusy" @click="genStrategyDraft">{{ strategyBusy ? '生成中…' : 'AI 生成策略初稿' }}</button>
+          <button class="outline-button" type="button" v-if="strategy" @click="strategyEditing = !strategyEditing">{{ strategyEditing ? '收起编辑' : '手动编辑策略' }}</button>
+        </div>
+      </div>
+      <p v-if="strategyError" class="panel" style="padding:12px 16px">{{ strategyError }}</p>
+
+      <div v-if="strategy" class="panel outline-strategy">
+        <template v-if="!strategyEditing">
+          <section>
+            <span class="section-label">我们应该怎么做</span>
+            <p class="strategy-text">{{ strategy.howTo || '（还没写）' }}</p>
+          </section>
+          <section>
+            <span class="section-label">多长时间达到什么目标</span>
+            <p class="strategy-text">{{ strategy.goals || '（还没写）' }}</p>
+          </section>
+          <section v-if="(strategy.phases || []).length">
+            <span class="section-label">分阶段策略与选题</span>
+            <div class="phase-list">
+              <article v-for="(p, i) in strategy.phases" :key="'ph' + i">
+                <b>{{ p.name }}</b>
+                <small>{{ p.goal }}</small>
+                <ul><li v-for="(tp, j) in p.topics" :key="'tp' + i + j">{{ tp }}</li></ul>
+              </article>
+            </div>
+          </section>
+          <p class="strategy-meta">最后更新：{{ strategy.updatedAt ? strategy.updatedAt.slice(0, 16).replace('T', ' ') : '—' }}（来源：{{ strategy.source === 'ai' ? 'AI 初稿' : strategy.source === 'chat' ? 'AI 对话修改' : '手动编辑' }}）</p>
+        </template>
+        <template v-else>
+          <label class="studio-field"><span>我们应该怎么做</span><textarea v-model="strategyForm.howTo" rows="5"></textarea></label>
+          <label class="studio-field"><span>多长时间达到什么目标</span><textarea v-model="strategyForm.goals" rows="3"></textarea></label>
+          <label class="studio-field"><span>分阶段策略（每行一个阶段：阶段名 | 目标 | 选题1、选题2）</span>
+            <textarea v-model="strategyForm.phasesText" rows="6"></textarea></label>
+          <div class="studio-actions">
+            <button class="outline-button" type="button" :disabled="strategySaving" @click="saveStrategyManual">{{ strategySaving ? '保存中…' : '保存策略' }}</button>
+            <button class="outline-button" type="button" @click="strategyForm = formFromStrategy(strategy); strategyEditing = false">取消</button>
+          </div>
+        </template>
+      </div>
+      <p v-else class="panel" style="padding:14px 16px">还没有运营策略 —— 点右上「AI 生成策略初稿」，或手动编辑。生成后它会进入内容生成的参考系（权重同参考系②）。</p>
+
+      <!-- AI 对话框：带上下文记忆，改的是真策略 -->
+      <div class="panel outline-chat">
+        <div class="panel-head">
+          <div><span class="section-label">TALK TO AI</span><h3>跟 AI 聊运营方向</h3>
+            <p class="pool-note">说清你想怎么调（人群/选题/节奏/目标），它会记着前面说过的，并把结果**真写进上面的策略**。</p></div>
+          <button class="outline-button" type="button" @click="resetChatHistory">清空对话</button>
+        </div>
+        <div class="chat-list" ref="chatBox">
+          <p v-if="!chatItems.length" class="chat-empty">还没有对话。可以先说一句：「这周主打学员改造案例，语气再亲切点」。</p>
+          <div v-for="m in chatItems" :key="'cm' + m.id" :class="['chat-msg', m.role]">
+            <b>{{ m.role === 'user' ? '你' : 'AI' }}</b>
+            <p>{{ m.content }}</p>
+            <small v-if="m.applied && m.applied.fields && m.applied.fields.length">✅ 已按这轮回答修改策略：{{ m.applied.fields.join(' / ') }}</small>
+          </div>
+        </div>
+        <div class="chat-input">
+          <input v-model="chatDraft" placeholder="例：目标人群收窄到 20-35 岁上班族女生" @keyup.enter="sendChat" />
+          <button class="outline-button" type="button" :disabled="chatSending" @click="sendChat">{{ chatSending ? '思考中…' : '发送' }}</button>
+        </div>
+      </div>
+
+      <!-- 三板块：保存后折叠，不点开不展示 -->
+      <div class="panel blocks-panel">
+        <div class="panel-head">
+          <div><span class="section-label">ACCOUNT SETTINGS</span><h3>人物设定 · 目标人群 · 核心要求</h3>
+            <p class="pool-note">{{ blocksSummary }}</p></div>
+          <button class="outline-button" type="button" @click="blocksOpen = !blocksOpen">{{ blocksOpen ? '收起' : '展开修改' }}</button>
+        </div>
+        <div v-if="blocksOpen" class="blocks-grid">
+          <label class="studio-field"><span>人物设定（我是谁 · 什么语气）</span>
+            <textarea v-model="blocks.persona" rows="3" placeholder="例：美妆老师，语气亲切像学姐"></textarea></label>
+          <label class="studio-field"><span>目标人群（说给谁听）</span>
+            <textarea v-model="blocks.audience" rows="3" placeholder="例：20-35 岁上班族女生"></textarea></label>
+          <label class="studio-field"><span>核心要求（卖点 + 转化目标 + 内容要求）</span>
+            <textarea v-model="blocks.selling" rows="3" placeholder="例：主推 1 对 1 体验课；结尾引导评论/私信"></textarea></label>
+          <div class="studio-actions">
+            <button class="outline-button" type="button" :disabled="blocksSaving" @click="saveBlocks">{{ blocksSaving ? '保存中…' : '保存' }}</button>
+            <small>保存后会自动收起，不再占版面。</small>
+          </div>
+        </div>
+      </div>
+
       <!-- ===== 运营计划表（内容生成总纲）===== -->
       <div class="module-toolbar panel">
         <div><span class="section-label">OPERATION PLAN</span><h2>运营计划表 · 账号总纲</h2><p>内容方向的默认依据：无人工干预时，生成的内容跟着它走。</p></div>
@@ -2003,7 +2675,60 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <article class="continuity-card panel"><span class="continuity-icon"><BookOpenCheck :size="21" /></span><div><span class="section-label">连贯性检查</span><h3>D{{ selectedOutlineDay + 1 }} 如何承上启下</h3><p>{{ selectedOutlineDay === 0 ? '先说出新手真实痛点，为后续工具与方法建立学习动机。' : `承接 D${selectedOutlineDay} 的结论，加入新的证明或行动，并为 D${selectedOutlineDay + 2 > 7 ? 7 : selectedOutlineDay + 2} 留下明确的问题。` }}</p></div><span class="gate-pass"><Check :size="13" />逻辑通过</span></article>
-    </template>
+    
+      <!-- ===================== R23 互动区 ===================== -->
+      <div class="module-toolbar panel">
+        <div><span class="section-label">INTERACTION</span><h2>互动区</h2>
+          <p>评论自动回复开关在这里；下面是我们回复了谁、谁给我们留言了。</p></div>
+        <span class="demo-badge">私信平台未开放自动回复</span>
+      </div>
+
+      <div class="panel reply-switch-card">
+        <div>
+          <span class="section-label">评论自动回复</span>
+          <strong>{{ replyOn ? '已开启 · 命中资料库就自动回' : '已关闭 · 只生成不发送，转人工待办' }}</strong>
+          <small>{{ replyOn ? '回复前仍会过：人工介入名单 → 资料库命中 → 禁用词 → 观察期' : '评论照常收集与匹配，你在「系统设置」的待办里逐条确认发送' }}</small>
+        </div>
+        <button type="button" :class="['switch-control', { active: replyOn }]" :aria-pressed="replyOn" :disabled="replySaving" @click="toggleReply" aria-label="评论自动回复开关"><i /></button>
+      </div>
+
+      <div class="panel interaction-panel">
+        <div class="panel-head">
+          <div><span class="section-label">FEED</span><h3>互动动态</h3></div>
+          <button class="outline-button" type="button" @click="loadInteractionFeed">刷新</button>
+        </div>
+        <div class="feed-grid">
+          <section class="feed-col">
+            <h4>我们回复了谁（{{ feedReplies2.length }}）</h4>
+            <p v-if="!feedReplies2.length" class="feed-empty">还没有回复记录 · 开启开关或人工回复后会在这里出现</p>
+            <ul v-else class="feed-list">
+              <li v-for="(r, i) in feedReplies2" :key="'ir' + (r.id != null ? r.id : i)">
+                <div class="feed-line"><b>{{ r.user || '匿名用户' }}</b><span class="feed-tag">{{ r.mode === 'auto' ? '自动回复' : '人工回复' }}</span><time>{{ r.at ? String(r.at).slice(5, 16).replace('T', ' ') : '' }}</time></div>
+                <p class="feed-quote">{{ r.comment }}</p>
+                <p v-if="r.reply" class="feed-reply">我们：{{ r.reply }}</p>
+                <small v-if="r.note">来自笔记《{{ r.note }}》</small>
+              </li>
+            </ul>
+          </section>
+          <section class="feed-col">
+            <h4>用户留言了什么（{{ feedIncoming2.length }}）</h4>
+            <p v-if="!feedIncoming2.length" class="feed-empty">还没有留言 · 新评论进来后会在这里出现</p>
+            <ul v-else class="feed-list">
+              <li v-for="(m, i) in feedIncoming2" :key="'im2' + i">
+                <div class="feed-line"><b>{{ m.user || '匿名用户' }}</b><time>{{ m.at ? String(m.at).slice(5, 16).replace('T', ' ') : '' }}</time></div>
+                <p class="feed-quote">{{ m.text }}</p>
+                <small v-if="m.note">来自笔记《{{ m.note }}》</small>
+              </li>
+            </ul>
+          </section>
+        </div>
+        <div class="dm-entry">
+          <b>私信</b>
+          <small>平台未给接口，自动回复做不了（已实测确认）。这里给一个人工入口：</small>
+          <a class="outline-button" href="https://www.xiaohongshu.com/messages" target="_blank" rel="noopener">打开小红书私信（人工回）</a>
+        </div>
+      </div>
+</template>
 
     <template v-else-if="props.activeView === 'library'">
       <div class="library-toolbar panel">
@@ -2021,7 +2746,57 @@ onBeforeUnmount(() => {
         </div>
         <aside class="gate-policy panel"><span class="policy-icon"><LockKeyhole :size="21" /></span><span class="section-label">原创度规则</span><h3>60% 硬门禁</h3><p>每次生成会比较标题、正文结构、核心观点和表达方式。</p><div class="threshold"><span>当前最高 {{ maxSimilarity === null ? '—' : maxSimilarity + '%' }}</span><b>门禁 60%</b><i><em :style="{ width: (maxSimilarity === null ? 0 : Math.min(100, maxSimilarity)) + '%' }" /></i></div><ul><li><Check :size="13" />达到 60% 自动退回</li><li><Check :size="13" />最多自动重写 3 次</li><li><Check :size="13" />通过后才允许排期</li></ul></aside>
       </div>
-    </template>
+    
+      <!-- ===================== R24 资料库（文案库下方） ===================== -->
+      <div class="module-toolbar panel">
+        <div><span class="section-label">KNOWLEDGE BASE</span><h2>资料库</h2>
+          <p>上传文档（docx / pdf / txt / md）→ 服务端解析成 AI 能用的知识条目 → **评论回复只能靠它回答**，不许乱编。</p></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <input ref="docInput" type="file" multiple accept=".docx,.pdf,.txt,.md" style="display:none" @change="onDocsPicked" />
+          <button class="outline-button" type="button" :disabled="docUploading" @click="pickDocs">{{ docUploading ? '解析中…（PDF 稍慢）' : '上传文档' }}</button>
+          <button class="outline-button" type="button" @click="loadLibraryDocs">刷新</button>
+        </div>
+      </div>
+      <p v-if="docError" class="panel" style="padding:12px 16px">{{ docError }}</p>
+      <p v-if="docMsg" class="panel" style="padding:12px 16px;border-color:#b9d3c1">{{ docMsg }}</p>
+
+      <div class="panel docs-panel">
+        <div class="panel-head">
+          <div><span class="section-label">DOCS</span><h3>已上传资料 · {{ docs.length }} 份</h3>
+            <p class="pool-note">共生成 {{ docEntries }} 条知识条目，自动进入评论回复的匹配库。</p></div>
+        </div>
+        <p v-if="!docs.length" class="pool-empty">还没有资料 —— 先传一份服务手册/价目表/常见问题，回复才有依据。</p>
+        <div v-else class="doc-list">
+          <article v-for="d in docs" :key="'dc' + d.id" class="doc-row">
+            <span class="doc-ext">{{ (d.ext || '').replace('.', '').toUpperCase() }}</span>
+            <span class="doc-copy">
+              <b>{{ d.name }}</b>
+              <small>{{ d.status === 'ok' ? `${d.chars} 字 · 生成 ${d.entries} 条知识条目` : '解析失败：' + (d.note || '') }}</small>
+              <small class="doc-preview">{{ d.preview }}…</small>
+            </span>
+            <span class="doc-actions">
+              <button type="button" @click="rebuildDoc(d)" :disabled="docBusy === d.id">重建条目</button>
+              <button type="button" style="color:#b4544a" @click="removeDoc(d)">删除</button>
+            </span>
+          </article>
+        </div>
+
+        <div class="doc-test">
+          <b>命中自测（验收用）</b>
+          <small>输入一句客户可能问的话，看能不能从资料里命中 —— 命中才可能被正确回复。</small>
+          <div class="chat-input">
+            <input v-model="matchProbe" placeholder="例：体验课多少钱 / 怎么预约" @keyup.enter="runMatchProbe" />
+            <button class="outline-button" type="button" :disabled="matchProbing" @click="runMatchProbe">{{ matchProbing ? '匹配中…' : '测一下' }}</button>
+          </div>
+          <div v-if="matchResult" class="match-result">
+            <b :style="matchResult.matched ? 'color:#5a8a6a' : 'color:#b4544a'">
+              {{ matchResult.matched ? `✅ 命中（得分 ${matchResult.score}，来源：${matchResult.source === 'library' ? '资料库' : '手工知识库'}）` : '❌ 没命中 —— 系统不会乱回，会转人工待办' }}
+            </b>
+            <p v-if="matchResult.matched">命中内容：{{ (matchResult.answer || '').slice(0, 120) }}…</p>
+          </div>
+        </div>
+      </div>
+</template>
 
     <template v-else-if="props.activeView === 'settings'">
       <div class="settings-banner panel"><span class="settings-icon"><ServerCog :size="23" /></span><div><span class="section-label">本机运行状态</span><h2>{{ bannerTitle }}</h2><p>{{ realStatus.error || (realStatus.checkedAt ? `检测时间 ${realStatus.checkedAt} · 数据来自本机服务，密钥只存本机` : '正在读取本机服务状态…') }}</p></div><span class="status-good"><Check :size="14" />{{ healthyCount }} / 4 正常</span></div>

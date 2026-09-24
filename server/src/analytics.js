@@ -158,6 +158,20 @@ function collectInsightInput() {
   return { noteCount, agg, top, recentTitles, positioning };
 }
 
+
+/** 平台 date 可能是 'YYYY-MM-DD' / 10 位秒 / 13 位毫秒 → 统一成 'YYYY-MM-DD'
+ *  （2026-09-24 修：之前直接把 10 位时间戳当日期喂给 AI，解读里出现过「1788796800」） */
+function dayOf(v) {
+  const s = String(v == null ? '' : v).trim()
+  if (!s) return ''
+  if (/^\d{10,13}$/.test(s)) {
+    const n = Number(s)
+    const d = new Date(n < 1e12 ? n * 1000 : n)
+    return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
+  }
+  return s.slice(0, 10)
+}
+
 export async function registerAnalyticsApi(app) {
   app.get('/api/notes/performance', async (req) => {
     const raw = Number((req.query || {}).limit);
@@ -184,7 +198,7 @@ export async function registerAnalyticsApi(app) {
           comments: num('comment_count'),
           shares: num('share_count'),
           fansDelta: num('rise_fans_count'),
-          viewSeries: (t.view_list || []).map((p) => ({ date: String(p.date || '').slice(0, 10), count: Number(p.count || 0) })),
+          viewSeries: (t.view_list || []).map((p) => ({ date: dayOf(p.date), count: Number(p.count || 0) })),
         };
       } else {
         creatorError = '创作者中心未返回 30 天窗口';

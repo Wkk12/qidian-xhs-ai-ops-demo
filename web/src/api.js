@@ -162,6 +162,40 @@ export const api = {
   // 设置（密钥只回掩码）
   settings: () => req('/settings'),
   saveSetting: (key, value) => req('/settings', { method: 'POST', body: { key, value } }),
+
+  // R20 发布：自动发送 / 发布保护 / 人工确认
+  publishSettings: () => req('/publish/settings'),
+  setPublishSettings: (p) => req('/publish/settings', { method: 'POST', body: p }),
+  confirmTask: (id) => req(`/publish/tasks/${id}/confirm`, { method: 'POST' }),
+
+  // R23 互动区：评论自动回复总开关
+  replySettings: () => req('/reply/settings'),
+  setReplySettings: (enabled) => req('/reply/settings', { method: 'POST', body: { enabled } }),
+
+  // R22 运营大纲：三板块 + 完整策略 + AI 对话（带记忆，真实改策略）
+  outline: () => req('/outline'),
+  saveOutlinePositioning: (p) => req('/outline/positioning', { method: 'POST', body: p }),
+  saveStrategy: (s) => req('/outline/strategy', { method: 'POST', body: s }),
+  genStrategy: (userIntent) => req('/outline/strategy/generate', { method: 'POST', body: { userIntent } }),
+  outlineChat: (limit = 40) => req(`/outline/chat?limit=${limit}`),
+  sendOutlineChat: (message) => req('/outline/chat', { method: 'POST', body: { message } }),
+  resetOutlineChat: () => req('/outline/chat', { method: 'DELETE' }),
+
+  // 回复命中自测（资料库/知识库能不能撑住这条提问）
+  matchTest: (text) => req('/comments/match-test', { method: 'POST', body: { text } }),
+
+  // R24 资料库：上传文档 → 知识条目（评论回复的知识支撑）
+  libraryDocs: () => req('/library'),
+  libraryDoc: (id) => req(`/library/${id}`),
+  deleteLibraryDoc: (id) => req(`/library/${id}`, { method: 'DELETE' }),
+  rebuildLibraryDoc: (id) => req(`/library/${id}/rebuild`, { method: 'POST' }),
+  libraryUpload: async (files) => {
+    const fd = new FormData()
+    for (const f of files) fd.append('file', f)
+    const r = await fetch('/api/library/upload', { method: 'POST', body: fd })
+    if (!r.ok) throw new Error('上传失败 HTTP ' + r.status)
+    return r.json()
+  },
 }
 
 export function useApiStatus() {

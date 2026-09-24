@@ -13,6 +13,7 @@
  *   生成后逐篇自动配图（autoIllustrate，复用 imagegen 链路）、7 天未排期草稿自动清理（purgeExpiredDrafts）。
  */
 import { chat, parseJson } from './deepseek.js';
+import { strategyText } from './outline.js';
 import { db, now, log } from './db.js';
 import { checkDuplicate, similarity } from './dedupe.js';
 import { generateImage } from './imagegen.js';
@@ -92,6 +93,38 @@ export function getTrends(limit = 12) {
 
 /* ---------------- 提示词构建 ---------------- */
 
+/**
+ * §0 参考系③补强：自己账号在平台上的真实表现（创作者中心每日浏览量）
+ * 走本机服务自己的 /api/creator/overview（已经带缓存+重试），避免重复实现取 cookie 的逻辑。
+ */
+let _platformRef = { at: 0, text: '' };
+
+export function platformText() {
+  return _platformRef.text || '  （平台数据未取到：登录态失效或平台尚未积累数据）';
+}
+
+export async function refreshPlatformRef({ ttlMs = 30 * 60 * 1000 } = {}) {
+  if (_platformRef.text && Date.now() - _platformRef.at < ttlMs) return _platformRef.text;
+  try {
+    const r = await fetch('http://127.0.0.1:8787/api/creator/overview', { signal: AbortSignal.timeout(20000) }).then((x) => x.json());
+    const win = r.thirty || r.seven || null;
+    const series = (win && win.series && win.series.view_count) || [];
+    const total = series.reduce((a, p) => a + (Number(p.count) || 0), 0);
+    const peak = series.reduce((a, p) => ((Number(p.count) || 0) > (Number(a.count) || 0) ? p : a), { date: '', count: 0 });
+    const sum = (win && win.summary ? win.summary : []).map((x) => `${x.label} ${x.total}`).join(' / ');
+    _platformRef = {
+      at: Date.now(),
+      text: series.length
+        ? `  近 ${series.length} 天浏览量合计 ${total}｜单日最高 ${peak.count}（${String(peak.date).slice(5)}）｜30 天汇总：${sum}\n  每日序列：${series.map((p) => `${String(p.date).slice(5)}:${p.count}`).join(' ')}`
+        : '',
+    };
+  } catch (e) {
+    _platformRef = { at: Date.now(), text: '' };
+    log('error', 'generate', '平台数据参考系取数失败: ' + e.message);
+  }
+  return _platformRef.text;
+}
+
 export function buildPrompt({ userIntent, postsPerDay, days, startDay, includeRoles }) {
   const pos = getPositioning();
   const good = getGoodPosts(8);
@@ -129,8 +162,14 @@ ${userIntent ? userIntent : '（用户本轮没有特别指定，请按下面的
   内容支柱占比：
 ${pillarText}
 
+【完整运营策略】同属参考系②（运营大纲里定的「怎么做 / 多长时间什么目标 / 分阶段选题」，生成方向必须服从它）
+${strategyText()}
+
 【参考系③·自己历史好文】权重 0.20（学习这些的选题角度与标题风格，**不得照抄**）
 ${goodText}
+
+【参考系③补·自己账号在平台上的真实表现】权重同属 0.20（创作者中心官方数据：先看什么内容真的有人看）
+${platformText()}
 
 【参考系④·当前行业热点】权重 0.10（可参考题材方向，**不得照抄标题**）
 ${trendText}
@@ -203,6 +242,7 @@ async function enforceDedupe(item, context, keyword = '') {
 /* ---------------- 生成主流程 ---------------- */
 
 export async function generateWeek({ userIntent = '', postsPerDay = 1, days = 7, startDay = 1, dryRun = false } = {}) {
+  await refreshPlatformRef(); // §0：先把「平时数据」取到手，再拼提示词
   const prompt = buildPrompt({ userIntent, postsPerDay, days, startDay });
   const t0 = Date.now();
   const r = await chat(

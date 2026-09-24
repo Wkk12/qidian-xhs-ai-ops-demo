@@ -33,6 +33,22 @@ function setSetting(key, value) {
     .run(key, JSON.stringify(value), now());
 }
 
+/**
+ * R23：评论自动回复总开关（默认**关**）
+ *  - 关：命中的评论也不自动发，一律进「人工待办」等人工确认（收集/匹配/生成照常跑，互动区仍能看到）
+ *  - 开：命中知识库且过禁用词/观察期后自动发出
+ * 开关挂在「运营大纲 · 互动区」顶部。
+ */
+export function isReplyEnabled() {
+  return getSetting('reply_auto_enabled', false) === true;
+}
+
+export function setReplyEnabled(v) {
+  setSetting('reply_auto_enabled', !!v);
+  log('info', 'comments', '自动回复开关 → ' + (isReplyEnabled() ? '开' : '关'));
+  return { ok: true, enabled: isReplyEnabled() };
+}
+
 /** 人设卡（默认给一套美妆/设计接单场景的） */
 export function getPersona() {
   return getSetting('persona_card', {
@@ -130,7 +146,8 @@ export function matchKnowledge(text) {
     }
     if (score > bestScore) { bestScore = score; best = r; }
   }
-  return bestScore >= 1.5 ? { item: best, score: bestScore } : null;
+  // R24：命中的知识来源可追溯（'library' = 来自「资料库」上传的文档）
+  return bestScore >= 1.5 ? { item: best, score: bestScore, source: best.source || 'manual' } : null;
 }
 
 /* ---------------- 回复生成 ---------------- */
@@ -226,6 +243,12 @@ export async function handleComment(n) {
   if (inObservation()) {
     saveComment({ noteId, noteTitle, commentId: cid, userId, userName, content, replyText: reply, status: 'pending_review', skipReason: `观察期内（至 ${observationUntil()}）需人工复核` });
     return { ok: true, decision: 'pending_review', reason: `观察期内（至 ${observationUntil()}）` };
+  }
+
+  // ⑤.5 R23：自动回复总开关（关 → 只生成不发送，转人工待办）
+  if (!isReplyEnabled()) {
+    saveComment({ noteId, noteTitle, commentId: cid, userId, userName, content, replyText: reply, status: 'pending_review', skipReason: '自动回复开关已关闭 → 转人工确认' });
+    return { ok: true, decision: 'pending_review', reason: '自动回复开关已关闭（回复已生成，等人工发）' };
   }
 
   // ⑥ 发送
