@@ -138,6 +138,30 @@
 .studio-form { padding: 16px 18px; display: grid; gap: 12px; }
 .studio-field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 11px; }
 .studio-field textarea, .studio-field input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; color: var(--ink); background: var(--panel); font-size: 12px; font-family: inherit; resize: vertical; }
+.studio-field .el-input, .studio-field .el-select, .studio-img-opts .el-select { width: 100%; }
+.el-input { --el-input-border-color: var(--border); --el-input-hover-border-color: var(--accent); --el-input-focus-border-color: var(--accent); --el-input-bg-color: var(--panel); --el-input-text-color: var(--ink); }
+.el-input-number { width: 92px; }
+.studio-opts .el-input-number { width: 112px; }
+.studio-inline .el-date-editor, .studio-inline .el-time-editor, .module-view label > .el-date-editor { min-width: 170px; }
+.module-view .el-date-editor { border-radius: 11px; }
+.module-view .el-date-editor.el-input__wrapper { border: 1px solid var(--border); box-shadow: none; background: var(--panel); }
+.module-view .el-switch { --el-switch-on-color: var(--accent); --el-switch-off-color: var(--panel-two); }
+.studio-opts .el-checkbox { margin-right: 12px; color: var(--ink); }
+.studio-opts .el-checkbox__label { font-size: 13px; }
+.studio-field .el-input__wrapper, .studio-field .el-textarea__inner, .studio-img-opts .el-input__wrapper {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: none;
+  font-size: 13px;
+}
+.studio-field .el-input__wrapper.is-focus, .studio-img-opts .el-input__wrapper.is-focus { box-shadow: 0 0 0 2px var(--accent-soft); }
+.studio-img-opts .el-select .el-select__wrapper { min-height: 40px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: none; }
+.search-field .el-input { flex: 1; min-width: 0; }
+.search-field .el-input__wrapper { padding: 0; border: 0; box-shadow: none; background: transparent; }
+.week-input .el-textarea__inner { min-height: 180px; }
+.forbidden-box.el-textarea { margin-top: 10px; }
 .studio-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .check-line { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-size: 11px; cursor: pointer; }
 .check-line input[type="checkbox"] { accent-color: var(--accent); }
@@ -384,6 +408,8 @@
 .setting-panel .studio-field { margin-top: 7px; }
 .setting-panel .studio-field span { font-size: 9.5px; }
 .setting-panel .studio-field input, .setting-panel .studio-field select { padding: 7px 10px; font-size: 11px; }
+.setting-panel .studio-field .el-input__wrapper, .setting-panel .studio-field .el-select__wrapper { min-height: 36px; padding: 0 10px; font-size: 12px; }
+.module-view label > .el-select { min-width: 220px; }
 .setting-panel .acc-actions { margin-top: 9px; }
 .setting-panel .tier-table { margin-top: 9px; padding: 9px 11px; gap: 4px; }
 .setting-panel .environment-list { margin-top: 8px; }

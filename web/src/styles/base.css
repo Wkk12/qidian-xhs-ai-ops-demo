@@ -240,6 +240,10 @@ button.account-mini:hover { background: var(--sidebar-active); }
 .login-qr-hint { margin: 12px 0 0; display: flex; align-items: center; justify-content: center; gap: 5px; color: var(--muted); font-size: 10px; }
 .login-qr-btn { width: 100%; margin-top: 12px; justify-content: center; }
 .login-qr-btn:disabled { opacity: .6; cursor: default; }
+/* 登录操作在窄窗口也保留完整文字，避免被顶部工具栏的图标按钮规则隐藏。 */
+.login-action-row .login-qr-btn { width: 100%; margin-left: 0; padding: 0 12px; }
+.login-action-row .login-qr-btn span { display: inline-flex; }
+.login-action-row .login-qr-btn svg:last-child { display: inline-block; }
 .login-qr-steps { margin: 11px 0 0; color: var(--muted); font-size: 9px; line-height: 1.7; }
 .login-ok { margin: 10px 0 0; color: var(--positive); font-size: 11px; font-weight: 700; }
 .gate-bar { height: 7px; margin-top: 13px; overflow: hidden; border-radius: 999px; background: var(--panel-two); }
@@ -312,4 +316,71 @@ button.account-mini:hover { background: var(--sidebar-active); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
   .chart-line { stroke-dashoffset: 0; }
+}
+
+/* ============ 系统级排版与滚动契约 ============ */
+html, body, #app { width: 100%; height: 100%; }
+body { overflow: hidden; font-size: 14px; line-height: 1.5; }
+.demo-stage { height: 100dvh; min-height: 0; overflow: hidden; padding: 16px; }
+.app-shell { min-height: 0; border-radius: 22px; }
+.workspace { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.workspace > .dashboard-grid,
+.workspace > .module-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: clip;
+  padding: 4px 8px 24px 0;
+  scrollbar-gutter: stable;
+}
+.workspace > .dashboard-grid { align-content: start; }
+.workspace > .module-view { margin-top: 0; }
+.topbar, .mobile-module-nav { flex: 0 0 auto; }
+.panel { border-radius: 16px; }
+.section-label, .today { font-size: 11px; line-height: 1.3; }
+.topbar h1 { font-size: clamp(22px, 2vw, 28px); }
+.panel-head h3, .module-view h3 { font-size: 17px; }
+.module-view h2 { font-size: 24px; }
+.module-view p { font-size: 13px; line-height: 1.7; }
+.metric-body small, .delta, .post-date small, .post-copy small, .post-state,
+.feed-line, .feed-list small, .live-pill, .ai-head small { font-size: 11px; }
+.metric-card > strong, .metric-body strong { font-size: clamp(28px, 3vw, 40px); }
+
+/* 所有抽屉/编辑器只在自身内容区滚动，不带动页面底层。 */
+.preview-layer { overscroll-behavior: contain; overflow: hidden; }
+.preview-card, .editor-card { max-height: calc(100dvh - 32px); overscroll-behavior: contain; }
+.preview-card { border-radius: 22px; }
+
+/* 原生按钮与 Element Plus 按钮共用一套尺寸、圆角和禁用态。 */
+.outline-button, .primary-button, .ghost-mini, .filter-chip, .round-link,
+.ai-action, .module-primary, .el-button {
+  min-height: 38px;
+  font-size: 13px;
+  font-weight: 650;
+  transition: transform .18s var(--ease), box-shadow .18s ease, opacity .18s ease;
+}
+.outline-button:hover:not(:disabled), .ghost-mini:hover:not(:disabled),
+.filter-chip:hover:not(:disabled), .el-button:hover:not(:disabled) { transform: translateY(-1px); }
+button:disabled, .el-button.is-disabled { cursor: not-allowed; opacity: .58; }
+
+/* 捕获层设置 data-action-busy，保证点击后立即出现可见反馈。 */
+[data-action-busy="true"] { position: relative; pointer-events: none; }
+[data-action-busy="true"] > * { opacity: .42; }
+[data-action-busy="true"]::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: action-spin .7s linear infinite;
+}
+@keyframes action-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 640px) {
+  .demo-stage { padding: 0; }
+  .app-shell { border-radius: 0; border-left: 0; border-right: 0; }
+  .workspace { padding: 16px 14px 0; }
+  .workspace > .dashboard-grid, .workspace > .module-view { padding-right: 0; }
 }

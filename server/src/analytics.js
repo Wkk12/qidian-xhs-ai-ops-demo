@@ -9,7 +9,7 @@
  *   insight：创作者中心近 30 天（读不到就降级，不失败）+ 本机 metrics/contents/positioning → DeepSeek
  */
 import fs from 'node:fs';
-import path from 'node:path';
+import { CREATOR_COOKIE } from './cookie-path.js';
 import { db, now, log } from './db.js';
 import { chat, parseJson, deepseekReady } from './deepseek.js';
 
@@ -103,8 +103,6 @@ function listNotesPerformance(limit) {
 
 // 创作者中心读取：与 index.js 里的 creatorHeaders/galaxy 同源（此处为独立副本——
 // 不能 import index.js，那会连带把整个服务进程拉起来）
-const CREATOR_COOKIE = process.env.XHS_COOKIE_FILE
-  || path.join(process.env.USERPROFILE || process.env.HOME || '', 'xiaohongshu-mcp-go', 'cookies.json');
 
 function creatorHeaders() {
   let cookie = '';

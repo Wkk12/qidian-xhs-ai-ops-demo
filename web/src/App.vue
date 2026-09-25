@@ -238,7 +238,7 @@ const trendWindowLabel = computed(() => (trendSeries.value.length > 7 ? '近 30 
 /* -------- 小红书扫码登录 / 切换账号：逻辑全在 account.js（设置页与左下角弹框共用同一套） -------- */
 import {
   loginOpen, loginState, qrImage, qrLoading, qrError, qrSecondsLeft, justLoggedIn,
-  scanBusy, scanMsg, qrStatusText, refreshLoginStatus, fetchLoginQrcode, openLogin,
+  scanBusy, scanMsg, qrStatusText, statusChecking, checkLoginNow, fetchLoginQrcode, openLogin,
   closeLogin, switchAccount, logoutAccount, setLoginSuccessHandler,
 } from './account.js'
 
@@ -374,10 +374,37 @@ const phoneSimilarity = computed(() => {
   const s = phonePreview.value ? phonePreview.value.similarity : null
   return typeof s === 'number' ? Math.round(s * 100) : null
 })
+
+// 为所有可操作按钮提供统一的即时反馈；异步按钮恢复可用后自动结束 loading。
+const actionObservers = new WeakMap()
+function clearActionBusy(button) {
+  button.removeAttribute('data-action-busy')
+  button.removeAttribute('aria-busy')
+  const observer = actionObservers.get(button)
+  observer?.disconnect()
+  actionObservers.delete(button)
+}
+
+function handleActionClick(event) {
+  const button = event.target.closest('button, [role="button"]')
+  if (!button || button.disabled || button.dataset.noBusy === 'true') return
+  if (button.classList.contains('nav-item') || button.classList.contains('mobile-module-nav')) return
+
+  button.setAttribute('data-action-busy', 'true')
+  button.setAttribute('aria-busy', 'true')
+  const observer = new MutationObserver(() => {
+    if (!button.disabled) clearActionBusy(button)
+  })
+  observer.observe(button, { attributes: true, attributeFilter: ['disabled'] })
+  actionObservers.set(button, observer)
+  window.setTimeout(() => {
+    if (!button.disabled) clearActionBusy(button)
+  }, 900)
+}
 </script>
 
 <template>
-  <main class="demo-stage theme-atelier">
+  <main class="demo-stage theme-atelier" @click.capture="handleActionClick">
     <section class="app-shell">
       <aside class="sidebar">
         <div class="brand">
@@ -413,8 +440,8 @@ const phoneSimilarity = computed(() => {
           <button class="account-mini" type="button" aria-label="小红书扫码登录" title="点此扫码登录 / 换账号" @click="openLogin">
             <span class="avatar">{{ (loginState.username || accountInfo.nickname || '?').charAt(0).toUpperCase() }}</span>
             <span>
-              <b>{{ loginState.username || accountInfo.nickname || '未登录' }}</b>
-              <small>{{ (loginState.username || accountInfo.nickname) ? '授权正常 · 点此换号' : (accountInfo.loading ? '检测中…' : '未登录 · 点此扫码登录') }}</small>
+              <b>{{ loginState.loggedIn ? (loginState.username || accountInfo.nickname || '已登录') : '未登录' }}</b>
+              <small>{{ loginState.unknown ? '登录状态待确认' : (loginState.loggedIn ? '授权正常 · 点此换号' : '未登录 · 点此扫码登录') }}</small>
             </span>
             <MoreHorizontal :size="18" />
           </button>
@@ -705,7 +732,7 @@ const phoneSimilarity = computed(() => {
               <span class="gate-icon"><Check :size="18" /></span>
               <div>
                 <small>当前登录账号</small>
-                <b>{{ !loginState.service ? '本机服务未启动' : (loginState.unknown ? '正在读取登录态…' : (loginState.loggedIn ? (loginState.username || '已登录') : '未登录')) }}</b>
+                <b>{{ loginState.unknown ? (statusChecking ? '正在读取登录态…' : '暂时无法确认登录状态') : (loginState.loggedIn ? (loginState.username || '已登录') : '未登录') }}</b>
               </div>
               <span v-if="loginState.loggedIn" class="gate-pass"><Check :size="13" /> 授权正常</span>
               <span v-else class="gate-warn"><LockKeyhole :size="13" /> 待登录</span>
@@ -721,13 +748,14 @@ const phoneSimilarity = computed(() => {
             </div>
             <p class="login-qr-hint"><Clock3 :size="13" /> {{ qrSecondsLeft > 0 ? `二维码 ${qrSecondsLeft} 秒后失效` : qrStatusText }}</p>
             <div class="login-action-row">
-              <button class="primary-button glass-button login-qr-btn" type="button" :disabled="qrLoading || scanBusy" @click="fetchLoginQrcode">
+              <ElButton class="primary-button glass-button login-qr-btn" native-type="button" :loading="statusChecking" :disabled="scanBusy || qrLoading" @click="checkLoginNow">我已扫码，检测登录</ElButton>
+              <ElButton class="primary-button glass-button login-qr-btn" native-type="button" :loading="qrLoading" :disabled="qrLoading || scanBusy" @click="fetchLoginQrcode">
                 <RefreshCw :size="15" />{{ qrLoading ? '获取中…' : '换一张二维码' }}
-              </button>
-              <button class="glass-button login-qr-btn" type="button" :disabled="scanBusy" @click="switchAccount">
+              </ElButton>
+              <ElButton class="glass-button login-qr-btn" native-type="button" :loading="scanBusy" :disabled="scanBusy" @click="switchAccount">
                 <Repeat :size="15" />{{ scanBusy ? '处理中…' : '切换账号（扫码）' }}
-              </button>
-              <button v-if="loginState.loggedIn" class="glass-button login-qr-btn" type="button" :disabled="scanBusy" @click="logoutAccount">退出登录</button>
+              </ElButton>
+              <ElButton v-if="loginState.loggedIn" class="glass-button login-qr-btn" native-type="button" :loading="scanBusy" :disabled="scanBusy" @click="logoutAccount">退出登录</ElButton>
             </div>
             <p v-if="scanMsg" class="login-ok">{{ scanMsg }}</p>
             <p class="login-qr-steps">打开【小红书 App】→ 左上角「扫一扫」→ 扫描后在手机上确认登录。</p>

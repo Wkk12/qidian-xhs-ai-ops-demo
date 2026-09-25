@@ -9,6 +9,7 @@
  */
 import { computed, ref } from 'vue'
 import { api } from './api.js'
+import { clearAuthNotice } from './requestGuard.js'
 
 export const loginOpen = ref(false)
 export const loginState = ref({ service: true, loggedIn: false, username: '', unknown: true })
@@ -19,44 +20,87 @@ export const qrSecondsLeft = ref(0)
 export const justLoggedIn = ref(false)
 export const scanBusy = ref(false)      // 切换账号 / 退出登录 进行中
 export const scanMsg = ref('')          // 切号后的提示（"已退出原账号，扫下面的码登录新账号"）
+export const statusChecking = ref(false) // 自动和手动检测共用请求，避免重复查询
 
 let qrCountdown = null
 let loginPoll = null
 let pollFails = 0
 let successHandler = null
+let pollVersion = 0 // 停止后，不允许旧请求重新启动轮询
+let authVersion = 0 // 切号后，不允许旧账号的请求覆盖新状态
+let statusFlight = null
+let qrExpiresAt = 0
 
 /** 登录成功后要刷新哪些数据 —— 由 App.vue 注册（避免这里反向依赖页面） */
 export function setLoginSuccessHandler(fn) { successHandler = fn }
 
 export const qrStatusText = computed(() => {
+  if (loginState.value.loggedIn) return '登录成功 · 授权正常'
   if (qrLoading.value) return '正在获取二维码…'
   if (qrError.value) return qrError.value
   if (qrSecondsLeft.value > 0) return '等待扫码…'
   return '二维码已过期，请点「换一张二维码」'
 })
 
-export async function refreshLoginStatus({ retry = true } = {}) {
-  try {
-    const s = await api.mcpStatus()
-    if (s && s.service) {
-      loginState.value = { service: true, loggedIn: !!s.loggedIn, username: s.username || '', unknown: false }
-      return loginState.value
-    }
-    // 服务在但没给答复：重试一次，别把「读不到」显示成「未登录」
-    if (retry) { await new Promise((r) => setTimeout(r, 1200)); return refreshLoginStatus({ retry: false }) }
-    loginState.value = { service: true, loggedIn: false, username: '', unknown: true }
-  } catch {
-    if (retry) { await new Promise((r) => setTimeout(r, 1200)); return refreshLoginStatus({ retry: false }) }
-    loginState.value = { service: false, loggedIn: false, username: '', unknown: false }
+/** 所有入口共用检测与成功收尾；失败不能伪装成「明确未登录」。 */
+export async function refreshLoginStatus({ pending = false } = {}) {
+  if (statusFlight) {
+    if (!pending || statusFlight.pending) return statusFlight.promise
+    await statusFlight.promise
+    return refreshLoginStatus({ pending })
   }
-  return loginState.value
+  const version = authVersion
+  statusChecking.value = true
+  const promise = (async () => {
+    try {
+      const s = await api.mcpStatus({ pending })
+      if (version !== authVersion) return loginState.value
+      const unknown = !s.service || !!s.loginError || !!s.serviceError
+      const wasLoggedIn = loginState.value.loggedIn
+      loginState.value = { service: !!s.service, loggedIn: unknown ? wasLoggedIn : s.loggedIn === true, username: s.username || '', unknown }
+      if (unknown) {
+        scanMsg.value = s.loginPhase === 'error' ? '扫码确认后保存登录凭据失败，请重新扫码；若持续失败请检查本机服务。' : '暂时无法确认登录状态，请稍后点「检测登录」重试。'
+      } else if (s.loggedIn) {
+        stopPoll()
+        clearInterval(qrCountdown)
+        qrSecondsLeft.value = 0
+        qrImage.value = ''
+        qrError.value = ''
+        justLoggedIn.value = true
+        scanMsg.value = '登录成功，账号状态已更新。'
+        clearAuthNotice()
+        if (!wasLoggedIn && successHandler) Promise.resolve().then(() => successHandler(s)).catch(() => {})
+      } else if (pending) {
+        scanMsg.value = s.loginPhase === 'expired' ? '扫码会话已过期，请换一张二维码重新扫码。' : '尚未检测到登录成功，请在手机上确认授权；有效二维码期间会继续自动检测。'
+      }
+    } catch {
+      if (version === authVersion) {
+        loginState.value = { ...loginState.value, unknown: true }
+        scanMsg.value = '登录检测超时或连接失败，请点击「检测登录」重试。'
+      }
+    } finally {
+      statusChecking.value = false
+      statusFlight = null
+    }
+    return loginState.value
+  })()
+  statusFlight = { promise, pending }
+  return promise
+}
+
+/** 用户主动查询时使用扫码短缓存，并显示本次结果。 */
+export async function checkLoginNow() {
+  scanMsg.value = '正在检测登录，请稍候…'
+  const s = await refreshLoginStatus({ pending: true })
+  return s
 }
 
 function startQrCountdown(seconds) {
   clearInterval(qrCountdown)
-  qrSecondsLeft.value = Math.max(30, Math.round(Number(seconds) || 240))
+  qrSecondsLeft.value = Math.max(1, Math.round(Number(seconds) || 240))
+  qrExpiresAt = Date.now() + qrSecondsLeft.value * 1000
   qrCountdown = setInterval(() => {
-    qrSecondsLeft.value = Math.max(0, qrSecondsLeft.value - 1)
+    qrSecondsLeft.value = Math.max(0, Math.ceil((qrExpiresAt - Date.now()) / 1000))
     if (qrSecondsLeft.value === 0) clearInterval(qrCountdown)
   }, 1000)
 }
@@ -69,10 +113,13 @@ function applyQr(d) {
   qrError.value = ''
   const ttl = Number(d && d.timeout)
   startQrCountdown(ttl > 1000 ? ttl / 1000 : (ttl > 0 ? ttl : 240))
+  startPoll()
 }
 
 /** 只换一张码（不切号，用当前浏览器会话重新出码） */
 export async function fetchLoginQrcode() {
+  if (qrLoading.value) return
+  stopPoll()
   qrLoading.value = true
   qrError.value = ''
   clearInterval(qrCountdown)
@@ -82,7 +129,7 @@ export async function fetchLoginQrcode() {
     // 实测：已登录时 MCP 不出码，只回 is_logged_in —— 这不是错误，要如实告诉用户怎么换号
     if (!d.img && (d.is_logged_in || d.isLoggedIn)) {
       qrImage.value = ''
-      await refreshLoginStatus({ retry: false })
+      await refreshLoginStatus({ pending: true })
       const who = loginState.value.username ? `（${loginState.value.username}）` : ''
       qrError.value = `当前已登录${who}，平台不会在登录状态下再出二维码。要换号请点「切换账号（扫码）」——它会先退出当前账号，再出新码。`
       return
@@ -98,7 +145,7 @@ export async function fetchLoginQrcode() {
   }
 }
 
-function stopPoll() { clearTimeout(loginPoll); clearInterval(qrCountdown) }
+function stopPoll() { pollVersion += 1; clearTimeout(loginPoll) }
 
 /**
  * 开始扫码流程。
@@ -108,47 +155,60 @@ function stopPoll() { clearTimeout(loginPoll); clearInterval(qrCountdown) }
  */
 export async function startScan({ switchAccount: doSwitch = false, openModal = false } = {}) {
   if (openModal) loginOpen.value = true
+  if (scanBusy.value || qrLoading.value) return
+  if (!doSwitch && qrImage.value && qrExpiresAt > Date.now()) {
+    startQrCountdown((qrExpiresAt - Date.now()) / 1000)
+    startPoll()
+    return
+  }
+  stopPoll()
+  clearInterval(qrCountdown)
+  authVersion += 1
+  if (statusFlight) await statusFlight.promise
   justLoggedIn.value = false
   scanMsg.value = ''
-  qrLoading.value = true
   qrImage.value = ''
-  scanBusy.value = doSwitch
+  scanBusy.value = true
   try {
-    const tasks = [refreshLoginStatus()]
-    if (doSwitch) tasks.push(api.mcpSwitchAccount().then((r) => { applyQr((r && r.data) || {}); scanMsg.value = '已退出原账号：扫下面的码可登录新的小红书账号' }))
-    else tasks.push(fetchLoginQrcode())
-    await Promise.allSettled(tasks)
+    if (doSwitch) {
+      qrLoading.value = true
+      const r = await api.mcpSwitchAccount()
+      if (!r.cleared || r.qrError) throw new Error(r.qrError || r.clearError || '退出原账号失败')
+      loginState.value = { service: true, loggedIn: false, username: '', unknown: false }
+      applyQr(r.data)
+      scanMsg.value = '已退出原账号，请扫码并在手机上确认登录。'
+    } else {
+      await fetchLoginQrcode()
+    }
+  } catch (e) {
+    qrError.value = '获取二维码失败：' + (e.message || '请重试')
+    scanMsg.value = qrError.value
   } finally {
     scanBusy.value = false
     qrLoading.value = false
   }
-  startPoll()
 }
 
 function startPoll() {
   stopPoll()
+  const version = pollVersion
   pollFails = 0
   const poll = async () => {
+    if (version !== pollVersion) return
+    if (Date.now() >= qrExpiresAt) { qrError.value = '二维码已过期，请刷新二维码，或点击「检测登录」确认结果。'; return }
     if (document.hidden) { loginPoll = setTimeout(poll, 3000); return }
-    const s = await refreshLoginStatus()
-    if (s.loggedIn) {
-      clearInterval(qrCountdown)
-      qrSecondsLeft.value = 0
-      qrImage.value = ''
-      justLoggedIn.value = true
-      scanMsg.value = ''
-      try { if (successHandler) await successHandler(s) } catch { /* 刷新失败不影响登录 */ }
-      return
-    }
-    if (s.service) pollFails = 0
+    // 扫码等待期间绕过后端的未登录长缓存，成功后立即更新两个入口的登录态。
+    const s = await refreshLoginStatus({ pending: true })
+    if (version !== pollVersion || (s.loggedIn && !s.unknown)) return
+    if (s.service && !s.unknown) pollFails = 0
     else pollFails += 1
     if (pollFails >= 10) {
       qrError.value = '本机服务连接异常，已暂停自动刷新；修好后点「换一张二维码」重新获取'
       return
     }
-    loginPoll = setTimeout(poll, s.service ? 4000 : Math.min(60000, 4000 * Math.pow(2, Math.min(pollFails, 4))))
+    loginPoll = setTimeout(poll, pollFails === 0 ? 2000 : Math.min(60000, 4000 * Math.pow(2, Math.min(pollFails, 4))))
   }
-  loginPoll = setTimeout(poll, 4000)
+  loginPoll = setTimeout(poll, 1000)
 }
 
 /** 左下角账号按钮 → 打开弹框并出码 */
@@ -159,6 +219,7 @@ export async function openLogin() {
 export function closeLogin() {
   loginOpen.value = false
   stopPoll()
+  clearInterval(qrCountdown)
 }
 
 /** 换号：清本机授权 + 出新码（设置页与弹框共用，两条入口同一实现） */
@@ -169,15 +230,20 @@ export async function switchAccount() {
       : window.confirm(`切换账号会先退出「${who}」（清除本机授权），然后出现新二维码；扫完新账号才能继续发内容。\n\n确定要换号吗？`)
     if (!ok) return
   }
-  await startScan({ switchAccount: true, openModal: false })
+  await startScan({ switchAccount: loginState.value.loggedIn, openModal: false })
 }
 
 /** 退出登录：清本机授权（之后发内容/读评论都会失败，需要重新扫码） */
 export async function logoutAccount() {
+  stopPoll()
+  clearInterval(qrCountdown)
+  authVersion += 1
   scanBusy.value = true
   try {
-    await api.mcpLogout()
-    await refreshLoginStatus()
+    const r = await api.mcpLogout()
+    if (!r.cleared) throw new Error(r.error || '清除授权失败')
+    if (statusFlight) await statusFlight.promise
+    await refreshLoginStatus({ pending: true })
     qrImage.value = ''
     scanMsg.value = '已退出登录（授权已清除）。要恢复使用请重新扫码登录。'
   } catch (e) {
@@ -188,9 +254,9 @@ export async function logoutAccount() {
 }
 
 function onVisibilityChange() {
-  if (!document.hidden && (loginOpen.value || qrImage.value) && !loginState.value.loggedIn) {
-    clearTimeout(loginPoll)
-    loginPoll = setTimeout(() => { refreshLoginStatus() }, 300)
+  if (!document.hidden && qrImage.value && !loginState.value.loggedIn) {
+    if (Date.now() < qrExpiresAt) startPoll()
+    else checkLoginNow()
   }
 }
 

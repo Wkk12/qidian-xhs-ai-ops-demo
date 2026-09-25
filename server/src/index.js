@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, now, log } from './db.js';
 import { mcp, extractMetrics, circuitState } from './mcp.js';
+import { CREATOR_COOKIE } from './cookie-path.js';
 import { registerAssets, UPLOAD_DIR } from './assets.js';
 import { registerInteractionApi } from './interaction.js';
 import { registerAnalyticsApi } from './analytics.js';
@@ -130,6 +131,7 @@ app.get('/api/health', async () => ({
 //    只有「已登录」的正常态才用 8 秒短缓存。
 const STATUS_TTL_MS = Number(process.env.XHS_MCP_STATUS_TTL || 8000);
 const STATUS_TTL_BLOCKED_MS = Number(process.env.XHS_MCP_STATUS_TTL_BLOCKED || 5 * 60 * 1000);
+const STATUS_TTL_PENDING_MS = Number(process.env.XHS_MCP_STATUS_TTL_PENDING || 1500);
 let _statusCache = { at: 0, data: null, inflight: null, ttl: STATUS_TTL_MS };
 
 function _ttlFor(d) {
@@ -153,6 +155,9 @@ async function computeMcpStatus() {
   try {
     const s = await mcp.loginStatus();
     out.loggedIn = s?.data?.is_logged_in === true;
+    out.loginPhase = s?.data?.state || (out.loggedIn ? 'confirmed' : 'logged_out');
+    out.loginSessionId = s?.data?.session_id;
+    if (s?.data?.error) out.loginError = s.data.error;
     out.username = s?.data?.username;
     out.userId = s?.data?.user_id;
     if (out.loggedIn) {
@@ -166,10 +171,13 @@ async function computeMcpStatus() {
   return out;
 }
 
-app.get('/api/mcp/status', async () => {
+app.get('/api/mcp/status', async (request) => {
+  // 扫码等待期间允许前端短缓存轮询，不能复用「未登录 5 分钟」的保护缓存。
+  const pending = request.query?.pending === '1' || request.query?.pending === 'true';
   const age = Date.now() - _statusCache.at;
-  if (_statusCache.data && age < _statusCache.ttl) {
-    return { ..._statusCache.data, cached: true, cacheAgeMs: age, cacheTtlMs: _statusCache.ttl };
+  const cacheTtl = pending ? STATUS_TTL_PENDING_MS : _statusCache.ttl;
+  if (_statusCache.data && age < cacheTtl) {
+    return { ..._statusCache.data, cached: true, cacheAgeMs: age, cacheTtlMs: cacheTtl, pending };
   }
   // 并发合并：同时到达的请求共用同一次真实调用
   if (!_statusCache.inflight) {
@@ -185,7 +193,7 @@ app.get('/api/mcp/status', async () => {
       });
   }
   const fresh = await _statusCache.inflight;
-  return { ...fresh, cached: false, cacheTtlMs: _statusCache.ttl };
+  return { ...fresh, cached: false, cacheTtlMs: pending ? STATUS_TTL_PENDING_MS : _statusCache.ttl, pending };
 });
 
 /** 熔断器状态（供前端/排障查看，不触发任何 MCP 调用） */
@@ -240,6 +248,8 @@ app.post('/api/mcp/logout', async () => {
 
 app.get('/api/mcp/qrcode', async () => {
   const r = await mcp.loginQrcode();
+  // 新扫码会话建立后，不能再复用出码前的未登录或超时结果。
+  _statusCache.at = 0;
   return { ok: true, data: r?.data || null };
 });
 
@@ -348,8 +358,6 @@ app.post('/api/notes/import', async () => {
 
 // ---------- 创作者中心（平台数据后台）：浏览量 / 涨粉 / 观看时长 ----------
 // 这些指标平台只在创作者中心提供，MCP 里没有；登录态用同一个 cookie（.xiaohongshu.com 泛域）
-const CREATOR_COOKIE = process.env.XHS_COOKIE_FILE
-  || path.join(process.env.USERPROFILE || process.env.HOME || '', 'xiaohongshu-mcp-go', 'cookies.json');
 
 function creatorHeaders() {
   let cookie = '';

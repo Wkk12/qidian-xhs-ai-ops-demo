@@ -1,0 +1,287 @@
+diff --git a/login_session.go b/login_session.go
+index 0d6722a..0d4da46 100644
+--- a/login_session.go
++++ b/login_session.go
+@@ -1,6 +1,9 @@
+ package main
+ 
+-import "sync"
++import (
++	"sync"
++	"time"
++)
+ 
+ // loginSessions 管理「已发出二维码、还在等扫码」的登录会话。
+ //
+@@ -8,9 +11,11 @@ import "sync"
+ // 但没有任何东西拦着重复调用，于是每调一次就多一个浏览器活到超时为止。
+ // 这里的约束是：同一时刻只保留一个待扫码会话，开新的就把旧的关掉。
+ type loginSessions struct {
+-	mu     sync.Mutex
+-	seq    uint64
+-	cancel func()
++	mu      sync.Mutex
++	seq     uint64
++	cancel  func()
++	result  *LoginStatusResponse
++	updated time.Time
+ }
+ 
+ // start 结束上一个待扫码会话（如果有），登记新的，返回本次会话的序号。
+@@ -21,6 +26,8 @@ func (l *loginSessions) start(cancel func()) uint64 {
+ 	l.seq++
+ 	seq := l.seq
+ 	l.cancel = cancel
++	l.result = &LoginStatusResponse{State: "waiting", SessionID: seq}
++	l.updated = time.Now()
+ 	l.mu.Unlock()
+ 
+ 	// 放到锁外调用：取消动作会触发对方 goroutine 的收尾，避免相互等待
+@@ -38,5 +45,52 @@ func (l *loginSessions) finish(seq uint64) {
+ 
+ 	if l.seq == seq {
+ 		l.cancel = nil
++		if l.result != nil && l.result.State == "waiting" {
++			l.result.State = "expired"
++			l.updated = time.Now()
++		}
++	}
++}
++
++// status 返回正在扫码或刚结束的会话状态，不创建另一个未登录浏览器。
++func (l *loginSessions) status() (*LoginStatusResponse, bool) {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	if l.result == nil || (l.cancel == nil && time.Since(l.updated) > 30*time.Second) {
++		return nil, false
++	}
++	result := *l.result
++	return &result, true
++}
++
++// complete 仅当前会话允许保存；保存失败不能宣称已登录。
++func (l *loginSessions) complete(seq uint64, user *LoginStatusResponse, save func() error) bool {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	if seq != l.seq {
++		return false
++	}
++	l.updated = time.Now()
++	if err := save(); err != nil {
++		l.result = &LoginStatusResponse{State: "error", Error: "保存登录凭据失败: " + err.Error(), SessionID: seq}
++		return false
++	}
++	user.IsLoggedIn = true
++	user.State = "confirmed"
++	user.SessionID = seq
++	l.result = user
++	return true
++}
++
++// reset 在退出或换号时取消扫码，禁止旧会话重新写入凭据。
++func (l *loginSessions) reset() {
++	l.mu.Lock()
++	cancel := l.cancel
++	l.seq++
++	l.cancel = nil
++	l.result = nil
++	l.mu.Unlock()
++	if cancel != nil {
++		cancel()
+ 	}
+ }
+diff --git a/login_session_test.go b/login_session_test.go
+index 47d79c5..14ce218 100644
+--- a/login_session_test.go
++++ b/login_session_test.go
+@@ -1,12 +1,40 @@
+ package main
+ 
+ import (
++	"errors"
+ 	"sync"
+ 	"testing"
+ 
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
++// TestLoginSessionStatus 覆盖会话查询、落盘失败与退出后迟到的扫码结果。
++func TestLoginSessionStatus(t *testing.T) {
++	var l loginSessions
++	seq := l.start(func() {})
++	result, ok := l.status()
++	assert.True(t, ok)
++	assert.Equal(t, "waiting", result.State)
++	assert.False(t, result.IsLoggedIn)
++	assert.False(t, l.complete(seq, &LoginStatusResponse{}, func() error { return errors.New("disk failure") }))
++	result, _ = l.status()
++	assert.Equal(t, "error", result.State)
++	assert.False(t, result.IsLoggedIn)
++	seq = l.start(func() {})
++	assert.True(t, l.complete(seq, &LoginStatusResponse{Username: "测试", UserID: "user"}, func() error { return nil }))
++	l.finish(seq)
++	result, ok = l.status()
++	assert.True(t, ok)
++	assert.True(t, result.IsLoggedIn)
++	assert.Equal(t, "confirmed", result.State)
++	l.reset()
++	saved := false
++	assert.False(t, l.complete(seq, &LoginStatusResponse{}, func() error { saved = true; return nil }))
++	assert.False(t, saved)
++	_, ok = l.status()
++	assert.False(t, ok)
++}
++
+ // TestLoginSessions 固定「同一时刻只保留一个待扫码会话」这条约束。
+ //
+ // 这是浏览器不再堆积的依据：每个待扫码会话都占着一个浏览器活到超时为止，
+diff --git a/service.go b/service.go
+index 499b216..c850b5b 100644
+--- a/service.go
++++ b/service.go
+@@ -43,6 +43,9 @@ type PublishRequest struct {
+ // LoginStatusResponse 登录状态响应
+ type LoginStatusResponse struct {
+ 	IsLoggedIn bool   `json:"is_logged_in"`
++	State      string `json:"state,omitempty"`
++	Error      string `json:"error,omitempty"`
++	SessionID  uint64 `json:"session_id,omitempty"`
+ 	Username   string `json:"username,omitempty"` // 当前登录账号的昵称
+ 	UserID     string `json:"user_id,omitempty"`  // 用户唯一标识（个人主页 URL 中的 ID）
+ }
+@@ -96,6 +99,7 @@ type UserProfileResponse struct {
+ 
+ // DeleteCookies 删除 cookies 文件，用于登录重置
+ func (s *XiaohongshuService) DeleteCookies(ctx context.Context) error {
++	s.logins.reset()
+ 	cookiePath := cookies.GetCookiesFilePath()
+ 	cookieLoader := cookies.NewLoadCookie(cookiePath)
+ 	return cookieLoader.DeleteCookies()
+@@ -103,6 +107,9 @@ func (s *XiaohongshuService) DeleteCookies(ctx context.Context) error {
+ 
+ // CheckLoginStatus 检查登录状态
+ func (s *XiaohongshuService) CheckLoginStatus(ctx context.Context) (*LoginStatusResponse, error) {
++	if result, ok := s.logins.status(); ok {
++		return result, nil
++	}
+ 	b := newBrowser()
+ 	defer b.Close()
+ 
+@@ -188,11 +195,16 @@ func (s *XiaohongshuService) waitScanInBackground(
+ 		defer s.logins.finish(seq)
+ 
+ 		if loginAction.WaitForLogin(ctxTimeout) {
+-			if err := saveCookies(page); err != nil {
+-				logrus.Errorf("扫码成功但保存 cookies 失败，会话 #%d: %v", seq, err)
+-				return
++			result := &LoginStatusResponse{}
++			if user, err := loginAction.CurrentUser(ctxTimeout); err == nil {
++				result.Username = user.Nickname
++				result.UserID = user.UserID
++			}
++			if s.logins.complete(seq, result, func() error { return saveCookies(page) }) {
++				logrus.Infof("扫码登录成功，cookies 已保存，会话 #%d", seq)
++			} else {
++				logrus.Warnf("登录会话 #%d 未完成凭据保存，状态接口可查询原因", seq)
+ 			}
+-			logrus.Infof("扫码登录成功，cookies 已保存，会话 #%d", seq)
+ 			return
+ 		}
+ 
+diff --git a/xiaohongshu/login.go b/xiaohongshu/login.go
+index 67e002d..20b3b1d 100644
+--- a/xiaohongshu/login.go
++++ b/xiaohongshu/login.go
+@@ -19,21 +19,14 @@ func NewLogin(page *rod.Page) *LoginAction {
+ 
+ func (a *LoginAction) CheckLoginStatus(ctx context.Context) (bool, error) {
+ 	// 加超时保护：只是查登录态的快速检查，不应无限挂（登录扫码的等待在 Login/WaitForLogin 里）
+-	pp := a.page.Context(ctx).Timeout(30 * time.Second)
+-	pp.MustNavigate("https://www.xiaohongshu.com/explore").MustWaitLoad()
+-
+-	time.Sleep(1 * time.Second)
+-
+-	exists, _, err := pp.Has(`.main-container .user .link-wrapper .channel`)
+-	if err != nil {
+-		return false, errors.Wrap(err, "check login status failed")
++	pp := a.page.Context(ctx).Timeout(15 * time.Second)
++	if err := pp.Navigate("https://www.xiaohongshu.com/explore"); err != nil {
++		return false, errors.Wrap(err, "open login status page failed")
+ 	}
+-
+-	if !exists {
+-		return false, errors.Wrap(err, "login status element not found")
+-	}
+-
+-	return true, nil
++	// 等应用账号状态就绪，不等待广告或统计资源完成加载。
++	waitCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
++	defer cancel()
++	return a.WaitForLogin(waitCtx), nil
+ }
+ 
+ // CurrentUser 当前登录用户的基础信息。
+@@ -48,10 +41,12 @@ func (a *LoginAction) CurrentUser(ctx context.Context) (*CurrentUser, error) {
+ 	pp := a.page.Context(ctx).Timeout(10 * time.Second)
+ 
+ 	res, err := pp.Eval(`() => {
+-		const u = window.__INITIAL_STATE__ && window.__INITIAL_STATE__.user;
+-		const info = u && u.userInfo && u.userInfo.value !== undefined ? u.userInfo.value : (u && u.userInfo);
+-		if (!info || info.guest) return "";
+-		return JSON.stringify({nickname: info.nickname, userId: info.userId || info.user_id});
++		const unwrap = x => x && (x.value ?? x._value ?? x._rawValue ?? x);
++		const u = unwrap(window.__INITIAL_STATE__ && window.__INITIAL_STATE__.user);
++		const info = unwrap(u && u.userInfo);
++		const id = info && (info.userId || info.user_id);
++		if (!info || info.guest || !id || !info.nickname) return "";
++		return JSON.stringify({nickname: info.nickname, userId: id});
+ 	}`)
+ 	if err != nil {
+ 		return nil, errors.Wrap(err, "read current user state failed")
+@@ -78,11 +73,13 @@ func (a *LoginAction) Login(ctx context.Context) error {
+ 
+ 	time.Sleep(2 * time.Second)
+ 
+-	if exists, _, _ := pp.Has(".main-container .user .link-wrapper .channel"); exists {
++	if user, err := a.CurrentUser(ctx); err == nil && user.UserID != "" {
+ 		return nil
+ 	}
+ 
+-	pp.MustElement(".main-container .user .link-wrapper .channel")
++	if !a.WaitForLogin(ctx) {
++		return errors.New("扫码登录未完成")
++	}
+ 
+ 	return nil
+ }
+@@ -95,7 +92,7 @@ func (a *LoginAction) FetchQrcodeImage(ctx context.Context) (string, bool, error
+ 
+ 	time.Sleep(2 * time.Second)
+ 
+-	if exists, _, _ := pp.Has(".main-container .user .link-wrapper .channel"); exists {
++	if user, err := a.CurrentUser(ctx); err == nil && user.UserID != "" {
+ 		return "", true, nil
+ 	}
+ 
+@@ -111,7 +108,6 @@ func (a *LoginAction) FetchQrcodeImage(ctx context.Context) (string, bool, error
+ }
+ 
+ func (a *LoginAction) WaitForLogin(ctx context.Context) bool {
+-	pp := a.page.Context(ctx)
+ 	ticker := time.NewTicker(500 * time.Millisecond)
+ 	defer ticker.Stop()
+ 
+@@ -120,8 +116,11 @@ func (a *LoginAction) WaitForLogin(ctx context.Context) bool {
+ 		case <-ctx.Done():
+ 			return false
+ 		case <-ticker.C:
+-			el, err := pp.Element(".main-container .user .link-wrapper .channel")
+-			if err == nil && el != nil {
++			// 账号状态比固定 CSS 类名稳定，页面重绘也不会卡在 Element 等待里。
++			probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
++			user, err := a.CurrentUser(probeCtx)
++			cancel()
++			if err == nil && user.UserID != "" {
+ 				return true
+ 			}
+ 		}

@@ -1,12 +1,20 @@
 <script setup>
 /* finesse · register=product · shell=multi-module-workbench · motion=feedback-only */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ElButton } from 'element-plus'
+import { ElButton, ElCheckbox, ElDatePicker, ElInput, ElInputNumber, ElOption, ElRadioButton, ElRadioGroup, ElSelect, ElSwitch, ElTimePicker } from 'element-plus'
 import 'element-plus/es/components/button/style/css'
+import 'element-plus/es/components/checkbox/style/css'
+import 'element-plus/es/components/date-picker/style/css'
+import 'element-plus/es/components/input/style/css'
+import 'element-plus/es/components/input-number/style/css'
+import 'element-plus/es/components/radio/style/css'
+import 'element-plus/es/components/select/style/css'
+import 'element-plus/es/components/switch/style/css'
+import 'element-plus/es/components/time-picker/style/css'
 import { api } from '../api.js'
 import {
   loginState, qrImage, qrLoading, qrError, qrSecondsLeft, scanBusy, scanMsg,
-  refreshLoginStatus, fetchLoginQrcode, switchAccount, logoutAccount,
+  refreshLoginStatus, fetchLoginQrcode, switchAccount, logoutAccount, statusChecking, checkLoginNow,
 } from '../account.js'
 import {
   ArrowRight,
@@ -48,8 +56,8 @@ const realStatus = ref({
 const connectionList = computed(() => [
   {
     icon: 'xhs', name: '小红书账号',
-    detail: realStatus.value.loggedIn ? (realStatus.value.username || '已登录') : '未登录',
-    state: realStatus.value.loggedIn ? '授权正常' : '未登录',
+    detail: loginState.value.unknown ? '待确认' : (loginState.value.loggedIn ? (loginState.value.username || '已登录') : '未登录'),
+    state: loginState.value.unknown ? '待确认' : (loginState.value.loggedIn ? '授权正常' : '未登录'),
   },
   {
     icon: 'ai', name: 'DeepSeek', detail: '内容生成与复盘',
@@ -485,6 +493,8 @@ const knowledgeItems = ref([])
 const knowledgeForm = ref({ category: '', question: '', answer: '', keywords: '' })
 const takeoverItems = ref([])
 const manualReplyText = ref({})
+const replyActionBusy = ref(null)
+const manualReplyBusy = ref(null)
 
 const COMMENT_STATE = { auto: '自动回复', manual: '人工回复', pending_review: '待人工', skipped: '已跳过' }
 
@@ -521,19 +531,23 @@ async function pollCommentsNow() {
 
 async function approveReply(c) {
   if (!window.confirm('确认把这条回复发送到小红书？')) return
+  replyActionBusy.value = c.id
   try { await api.approveComment(c.id); showNotice('已发送'); await loadComments() }
   catch (e) { showNotice('发送失败：' + (e.message || '')) }
+  finally { replyActionBusy.value = null }
 }
 
 async function sendManualReply(c) {
   const text = (manualReplyText.value[c.id] || '').trim()
   if (!text) { showNotice('先填写回复内容'); return }
+  manualReplyBusy.value = c.id
   try {
     await api.replyCommentManual(c.id, text)
     showNotice('已发送，并已把该用户加入人工介入名单')
     manualReplyText.value[c.id] = ''
     await loadComments()
   } catch (e) { showNotice('发送失败：' + (e.message || '')) }
+  finally { manualReplyBusy.value = null }
 }
 
 async function addTakeoverByUser(c) {
@@ -661,6 +675,7 @@ const compLoading = ref(false)
 const compDiscovering = ref(false)
 const compDiscover = ref(null)
 const compDeepBusy = ref(null)
+const compAddBusy = ref(null)
 const compError = ref('')
 
 async function loadCompetitors() {
@@ -689,6 +704,7 @@ async function discoverCompetitors() {
 }
 
 async function addCompetitorItem(c) {
+  compAddBusy.value = c.authorId
   try {
     await api.addCompetitor({ userId: c.authorId, nickname: c.nickname })
     showNotice('已加入监控：' + c.nickname)
@@ -696,6 +712,8 @@ async function addCompetitorItem(c) {
     await discoverCompetitors()
   } catch (e) {
     showNotice('添加失败：' + (e.message || ''))
+  } finally {
+    compAddBusy.value = null
   }
 }
 
@@ -1316,6 +1334,7 @@ const generating = ref(false)
 const generationDone = ref(false)
 const autoPublish = ref(true)
 const assetFilter = ref('全部')
+const assetFilters = ['全部', '上传', 'AI生成', '历史']
 const selectedAssets = ref([])
 const selectedOutlineDay = ref(2)
 const libraryQuery = ref('')
@@ -1346,6 +1365,7 @@ const attachSelected = async () => {
     showNotice(`D${day + 1} 还没有内容草稿 —— 先去「内容工坊」生成，再回来挂图`)
     return
   }
+  assetLoading.value = true
   try {
     for (const aid of selectedAssets.value) await api.attachAsset(aid, target.id)
     showNotice(`已把 ${selectedAssets.value.length} 张素材挂到 D${day + 1} 内容上（已落库）`)
@@ -1353,6 +1373,8 @@ const attachSelected = async () => {
     await loadAssets()
   } catch (e) {
     showNotice('挂图失败：' + (e.message || '未知错误'))
+  } finally {
+    assetLoading.value = false
   }
 }
 
@@ -2064,23 +2086,23 @@ onBeforeUnmount(() => {
           <div class="panel studio-form">
             <label class="studio-field">
               <span>这次想说什么方向？（权重最高，可留空 = 跟运营计划表走）</span>
-              <textarea v-model="strategyInput" rows="3" placeholder="例：这周主推新手化妆体验课，语气亲切像学姐；不要硬广"></textarea>
+              <ElInput v-model="strategyInput" type="textarea" :rows="3" resize="none" placeholder="例：这周主推新手化妆体验课，语气亲切像学姐；不要硬广" />
             </label>
 
             <div class="studio-opts">
-              <label class="check-line"><input type="checkbox" v-model="genImages" /> 一起生图（生成文章时按内容自动配图，不用手写提示词）</label>
-              <label class="check-line"><input type="checkbox" v-model="genScheduleOn" /> 生成后直接排期</label>
-              <label class="check-line mini">每天 <input type="number" v-model.number="genPostsPerDay" min="1" max="9" /> 条</label>
+              <ElCheckbox v-model="genImages">一起生图（生成文章时按内容自动配图，不用手写提示词）</ElCheckbox>
+              <ElCheckbox v-model="genScheduleOn">生成后直接排期</ElCheckbox>
+              <label class="check-line mini">每天 <ElInputNumber v-model="genPostsPerDay" :min="1" :max="9" controls-position="right" /> 条</label>
               <template v-if="genScheduleOn">
-                <span class="studio-inline">从 <input type="date" v-model="genScheduleDate" /> 起</span>
-                <span class="studio-inline">每天 <input type="time" v-model="genScheduleTime" /> 发送</span>
+                <span class="studio-inline">从 <ElDatePicker v-model="genScheduleDate" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /> 起</span>
+                <span class="studio-inline">每天 <ElTimePicker v-model="genScheduleTime" value-format="HH:mm" format="HH:mm" placeholder="选择时间" /> 发送</span>
               </template>
             </div>
 
             <div class="studio-actions">
-              <button class="outline-button" type="button" :disabled="genRunning || aiReady === false" @click="runGenerateUnified">
+              <ElButton native-type="button" class="outline-button" :loading="genRunning" :disabled="genRunning || aiReady === false" @click="runGenerateUnified">
                 <Sparkles :size="15" />{{ genRunning ? '生成中…（约 10–60 秒）' : '开始生成' }}
-              </button>
+              </ElButton>
               <small>{{ genModePreview === 'seven' ? '首次生成会一次产出 7 天（沿七天叙事）' : '已有内容，本次只生成 1 篇（承接上一篇）' }}<template v-if="genImages">；并按内容自动配图</template></small>
             </div>
           </div>
@@ -2099,23 +2121,23 @@ onBeforeUnmount(() => {
             <span class="studio-img-note">{{ imgStatus && imgStatus.providerName ? imgStatus.providerName : '产物自动进素材库' }}</span>
           </div>
           <label class="studio-field"><span>要什么图（一句话）</span>
-            <input v-model="imgForm.prompt" placeholder="例：美容院海报配图，一位女性在护理" />
+            <ElInput v-model="imgForm.prompt" placeholder="例：美容院海报配图，一位女性在护理" />
           </label>
           <div class="studio-img-opts">
             <label>档位
-              <select v-model="imgForm.tier">
-                <option v-for="t in imgTiers" :key="'t' + t.key" :value="t.key">{{ t.name }} · 实出 {{ t.pixels }}</option>
-              </select>
+              <ElSelect v-model="imgForm.tier" placeholder="选择档位">
+                <ElOption v-for="t in imgTiers" :key="'t' + t.key" :label="`${t.name} · 实出 ${t.pixels}`" :value="t.key" />
+              </ElSelect>
             </label>
             <label>比例
-              <select v-model="imgForm.ratio">
-                <option v-for="r in ['1:1','2:3','3:4','4:3','3:2','9:16','16:9','4:5']" :key="'r' + r" :value="r">{{ r }}</option>
-              </select>
+              <ElSelect v-model="imgForm.ratio" placeholder="选择比例">
+                <ElOption v-for="r in ['1:1','2:3','3:4','4:3','3:2','9:16','16:9','4:5']" :key="'r' + r" :label="r" :value="r" />
+              </ElSelect>
             </label>
           </div>
           <div class="studio-actions">
-            <button class="outline-button" type="button" :disabled="imgExpanding" @click="expandImgPrompt">{{ imgExpanding ? '扩写中…' : '先扩写提示词' }}</button>
-            <button class="outline-button" type="button" :disabled="imgBusy" @click="runImgGen">{{ imgBusy ? '出图中…（约1分钟）' : '生成图片' }}</button>
+            <ElButton native-type="button" class="outline-button" :loading="imgExpanding" :disabled="imgExpanding" @click="expandImgPrompt">{{ imgExpanding ? '扩写中…' : '先扩写提示词' }}</ElButton>
+            <ElButton native-type="button" class="outline-button" :loading="imgBusy" :disabled="imgBusy" @click="runImgGen">{{ imgBusy ? '出图中…（约1分钟）' : '生成图片' }}</ElButton>
           </div>
           <p v-if="imgError" class="studio-msg err">{{ imgError }}</p>
           <div v-if="imgExpanded" class="studio-expanded"><b>实际发给模型的提示词</b>{{ imgExpanded }}</div>
@@ -2137,7 +2159,7 @@ onBeforeUnmount(() => {
             <h3>待发送内容 · {{ poolRows.length }} 条</h3>
             <p class="pool-note">生成但还没发出的内容。未排期的草稿从生成起 <b>7 天自动清理</b>；<b>收藏后永久保留</b>。</p>
           </div>
-          <button class="outline-button" type="button" @click="scanAllDrafts"><RefreshCw :size="15" />全部草稿查重</button>
+          <ElButton native-type="button" class="outline-button" @click="scanAllDrafts"><RefreshCw :size="15" />全部草稿查重</ElButton>
         </div>
         <p v-if="!poolRows.length" class="pool-empty">还没有待发送内容 —— 用上面的生成入口产出第一条。</p>
         <div v-else class="week-content-grid pool-grid">
@@ -2160,14 +2182,14 @@ onBeforeUnmount(() => {
                 <span class="pass-text" :style="item.dupScore !== null && item.dupScore >= 60 ? 'color:#b4544a' : ''">
                   <LockKeyhole :size="13" /> {{ item.dupScore === null ? '未查重' : '相似 ' + item.dupScore + '%' }}
                 </span>
-                <button type="button" @click="openEditor(item)">编辑 <ChevronRight :size="14" /></button>
-                <button type="button" v-if="item.status === 'draft'" style="color:#5a8a6a" @click="saveEditById(item.id, 'approved')">通过</button>
-                <button type="button" v-if="item.status === 'draft'" style="color:#b4544a" @click="saveEditById(item.id, 'rejected')">退回</button>
-                <button type="button" :disabled="favoriteBusy === item.id" @click="toggleFavorite(item)">{{ item.favorite ? '取消收藏' : '收藏' }}</button>
+                <ElButton text native-type="button" @click="openEditor(item)">编辑 <ChevronRight :size="14" /></ElButton>
+                <ElButton v-if="item.status === 'draft'" text native-type="button" style="color:#5a8a6a" :loading="editSaving" :disabled="editSaving" @click="saveEditById(item.id, 'approved')">通过</ElButton>
+                <ElButton v-if="item.status === 'draft'" text native-type="button" style="color:#b4544a" :loading="editSaving" :disabled="editSaving" @click="saveEditById(item.id, 'rejected')">退回</ElButton>
+                <ElButton text native-type="button" :loading="favoriteBusy === item.id" :disabled="favoriteBusy === item.id" @click="toggleFavorite(item)">{{ item.favorite ? '取消收藏' : '收藏' }}</ElButton>
               </div>
               <div class="pool-sched">
-                <input type="datetime-local" v-model="schedPicker[item.id]" />
-                <button type="button" :disabled="schedItemBusy === item.id" @click="schedulePoolItem(item)">{{ schedItemBusy === item.id ? '排期中…' : '排到这天发' }}</button>
+                <ElDatePicker v-model="schedPicker[item.id]" type="datetime" value-format="YYYY-MM-DDTHH:mm" format="MM月DD日 HH:mm" placeholder="选择发布时间" />
+                <ElButton text native-type="button" :loading="schedItemBusy === item.id" :disabled="schedItemBusy === item.id" @click="schedulePoolItem(item)">{{ schedItemBusy === item.id ? '排期中…' : '排到这天发' }}</ElButton>
               </div>
             </div>
           </article>
@@ -2179,7 +2201,7 @@ onBeforeUnmount(() => {
         <div><span class="section-label">TREND RADAR</span><h2>行业热榜 · 真实爆款</h2><p>每天 09:30 / 20:30 自动抓取（<b>{{ trendTotal }}</b> 条已入库{{ trendLast ? '，最近 ' + trendLast : '' }}），生成内容时作为热点参考。</p></div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <span style="font-size:12px;color:#8b8175">关键词：{{ trendKeywords.join(' / ') || '—' }}</span>
-          <button class="outline-button" type="button" :disabled="trendScraping" @click="runScrapeNow"><RefreshCw :size="15" />{{ trendScraping ? '抓取中…（约 30 秒）' : '立即抓取' }}</button>
+          <ElButton native-type="button" class="outline-button" :loading="trendScraping" :disabled="trendScraping" @click="runScrapeNow"><RefreshCw :size="15" />{{ trendScraping ? '抓取中…（约 30 秒）' : '立即抓取' }}</ElButton>
         </div>
       </div>
       <p v-if="trendError" class="panel" style="padding:12px 16px">{{ trendError }}</p>
@@ -2206,11 +2228,11 @@ onBeforeUnmount(() => {
           <div class="editor-grid">
             <section class="editor-left">
               <label class="studio-field"><span>标题（{{ editForm.title.length }} 字）</span>
-                <input v-model="editForm.title" placeholder="带钩子的标题，≤20 字" /></label>
+                <ElInput v-model="editForm.title" placeholder="带钩子的标题，≤20 字" /></label>
               <label class="studio-field"><span>正文（{{ editForm.body.length }} 字 · 建议 150–400 字，多带 emoji）</span>
-                <textarea v-model="editForm.body" rows="12"></textarea></label>
+                <ElInput type="textarea" v-model="editForm.body" rows="12" /></label>
               <label class="studio-field"><span>话题标签（空格分隔）</span>
-                <input v-model="editForm.tagsText" placeholder="#新手化妆 #化妆教程" /></label>
+                <ElInput v-model="editForm.tagsText" placeholder="#新手化妆 #化妆教程" /></label>
 
               <div class="editor-imgs">
                 <b>配图（{{ editorImages.length }} 张）</b>
@@ -2227,10 +2249,10 @@ onBeforeUnmount(() => {
               <p v-if="editError" class="studio-msg err">{{ editError }}</p>
 
               <div class="studio-actions">
-                <button class="outline-button" type="button" @click="saveEdit()" :disabled="editSaving">{{ editSaving ? '保存中…' : '保存' }}</button>
-                <button class="outline-button" type="button" @click="saveEdit('approved')" :disabled="editSaving" style="color:#5a8a6a">保存并通过</button>
-                <button class="outline-button" type="button" @click="saveEdit('rejected')" :disabled="editSaving" style="color:#b4544a">退回</button>
-                <button class="outline-button" type="button" @click="checkDupNow" :disabled="dupChecking">{{ dupChecking ? '查重中…' : '立即查重' }}</button>
+                <ElButton native-type="button" class="outline-button" :loading="editSaving" @click="saveEdit()" :disabled="editSaving">{{ editSaving ? '保存中…' : '保存' }}</ElButton>
+                <ElButton native-type="button" class="outline-button" :loading="editSaving" @click="saveEdit('approved')" :disabled="editSaving" style="color:#5a8a6a">保存并通过</ElButton>
+                <ElButton native-type="button" class="outline-button" :loading="editSaving" @click="saveEdit('rejected')" :disabled="editSaving" style="color:#b4544a">退回</ElButton>
+                <ElButton native-type="button" class="outline-button" :loading="dupChecking" @click="checkDupNow" :disabled="dupChecking">{{ dupChecking ? '查重中…' : '立即查重' }}</ElButton>
               </div>
             </section>
 
@@ -2262,14 +2284,12 @@ onBeforeUnmount(() => {
         <article class="auto-card panel">
           <div><span class="section-label">自动发送</span><strong>{{ pubSet.autoSend ? '开 · 到点直接发' : '关 · 到点需手动确认' }}</strong>
           <small>{{ pubSet.autoSend ? '无需询问，系统到点直接发送' : '到点先转「待确认」，你点确认后才发送' }}</small></div>
-          <button type="button" :class="['switch-control', { active: pubSet.autoSend }]" :aria-pressed="pubSet.autoSend"
-                  :disabled="pubSetSaving" aria-label="自动发送开关" @click="togglePubSet('autoSend')"><i /></button>
+          <ElSwitch :model-value="pubSet.autoSend" :loading="pubSetSaving" :disabled="pubSetSaving" aria-label="自动发送开关" @change="togglePubSet('autoSend')" />
         </article>
         <article class="auto-card panel">
           <div><span class="section-label">发布保护</span><strong>{{ pubSet.protect ? '开 · 五项预检全过才发' : '关 · 跳过预检直接发' }}</strong>
           <small>{{ pubSet.protect ? '发布前 15 分钟自动预检：登录态/查重/配图/正文字数/发布间隔' : '已关闭保护：不会拦截，直接进入发送流程' }}</small></div>
-          <button type="button" :class="['switch-control', { active: pubSet.protect }]" :aria-pressed="pubSet.protect"
-                  :disabled="pubSetSaving" aria-label="发布保护开关" @click="togglePubSet('protect')"><i /></button>
+          <ElSwitch :model-value="pubSet.protect" :loading="pubSetSaving" :disabled="pubSetSaving" aria-label="发布保护开关" @change="togglePubSet('protect')" />
         </article>
       </div>
       <p v-if="pubSetError" class="panel" style="padding:12px 16px">{{ pubSetError }}</p>
@@ -2285,8 +2305,8 @@ onBeforeUnmount(() => {
           <p>{{ bestTime ? bestTime.note : '默认按运营策略走，无需手动设置' }}</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="outline-button" type="button" @click="manualTimeOpen = !manualTimeOpen">{{ manualTimeOpen ? '收起手动设置' : '手动调整' }}</button>
-          <button class="outline-button" type="button" @click="loadPublish(true)"><RefreshCw :size="15" />刷新</button>
+          <ElButton native-type="button" class="outline-button" @click="manualTimeOpen = !manualTimeOpen">{{ manualTimeOpen ? '收起手动设置' : '手动调整' }}</ElButton>
+          <ElButton native-type="button" class="outline-button" @click="loadPublish(true)"><RefreshCw :size="15" />刷新</ElButton>
         </div>
       </div>
       <div v-if="manualTimeOpen" class="panel" style="padding:16px 18px;margin-bottom:0">
@@ -2294,16 +2314,16 @@ onBeforeUnmount(() => {
         <p style="margin:6px 0 0;font-size:11px;color:#8b8175">不点这里的话，系统就按上面的建议时间（运营策略）走。</p>
         <div style="display:flex;gap:12px;align-items:end;margin-top:12px;flex-wrap:wrap">
           <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:#8b8175;flex:1;min-width:240px">选择内容
-            <select v-model="scheduleForm.contentId" style="padding:9px 11px;border:1px solid var(--border);border-radius:9px;font-size:13px;background:#fff">
-              <option value="">— 请选择 —</option>
-              <option v-for="c in poolRows" :key="'opt' + c.id" :value="c.id">{{ c.title }}（{{ c.state }}）</option>
-            </select>
+            <ElSelect v-model="scheduleForm.contentId" placeholder="请选择内容">
+              <ElOption value="" label="— 请选择 —" />
+              <ElOption v-for="c in poolRows" :key="'opt' + c.id" :value="c.id" :label="`${c.title}（${c.state}）`" />
+            </ElSelect>
           </label>
           <label style="display:flex;flex-direction:column;gap:6px;font-size:12px;color:#8b8175">发布时间
-            <input v-model="scheduleForm.scheduledAt" type="datetime-local" style="padding:9px 11px;border:1px solid var(--border);border-radius:9px;font-size:13px" />
+            <ElDatePicker v-model="scheduleForm.scheduledAt" type="datetime" value-format="YYYY-MM-DDTHH:mm" format="YYYY-MM-DD HH:mm" placeholder="选择发布时间" />
           </label>
-          <button class="outline-button" type="button" @click="useBestTime">采用建议</button>
-          <button class="outline-button" type="button" :disabled="scheduleSaving" @click="doSchedule">{{ scheduleSaving ? '加入中…' : '加入队列' }}</button>
+          <ElButton native-type="button" class="outline-button" @click="useBestTime">采用建议</ElButton>
+          <ElButton native-type="button" class="outline-button" :loading="scheduleSaving" :disabled="scheduleSaving" @click="doSchedule">{{ scheduleSaving ? '加入中…' : '加入队列' }}</ElButton>
         </div>
       </div>
 
@@ -2344,9 +2364,9 @@ onBeforeUnmount(() => {
               <!-- 左：文章内容（点「编辑」可改，改完点「保存」落库） -->
               <section class="week-article">
                 <template v-if="editingTask === t.id">
-                  <input v-model="taskEdit[t.id].title" class="week-input" placeholder="标题" />
-                  <textarea v-model="taskEdit[t.id].body" rows="10" class="week-input"></textarea>
-                  <input v-model="taskEdit[t.id].tagsText" class="week-input" placeholder="话题标签（空格分隔）" />
+                  <ElInput v-model="taskEdit[t.id].title" class="week-input" placeholder="标题" />
+                  <ElInput type="textarea" v-model="taskEdit[t.id].body" rows="10" class="week-input" />
+                  <ElInput v-model="taskEdit[t.id].tagsText" class="week-input" placeholder="话题标签（空格分隔）" />
                 </template>
                 <template v-else>
                   <h4>{{ t.content_title || '(无标题)' }}</h4>
@@ -2380,11 +2400,11 @@ onBeforeUnmount(() => {
 
               <!-- 按钮 -->
               <div class="week-actions">
-                <button type="button" class="outline-button" @click="precheckTask(t)">预检</button>
-                <button type="button" class="outline-button" v-if="editingTask !== t.id" @click="startEditTask(t)">编辑</button>
-                <button type="button" class="outline-button" v-else :disabled="taskSaving === t.id" @click="saveTaskContent(t)">{{ taskSaving === t.id ? '保存中…' : '保存' }}</button>
-                <button type="button" class="outline-button" v-if="t.status === 'awaiting_confirm'" @click="confirmPubTask(t)">确认发送</button>
-                <button type="button" class="outline-button" v-if="t.status === 'pending'" @click="cancelPubTask(t.id)">取消</button>
+                <ElButton native-type="button" class="outline-button" @click="precheckTask(t)">预检</ElButton>
+                <ElButton native-type="button" class="outline-button" v-if="editingTask !== t.id" @click="startEditTask(t)">编辑</ElButton>
+                <ElButton native-type="button" class="outline-button" v-else :loading="taskSaving === t.id" :disabled="taskSaving === t.id" @click="saveTaskContent(t)">{{ taskSaving === t.id ? '保存中…' : '保存' }}</ElButton>
+                <ElButton native-type="button" class="outline-button" v-if="t.status === 'awaiting_confirm'" @click="confirmPubTask(t)">确认发送</ElButton>
+                <ElButton native-type="button" class="outline-button" v-if="t.status === 'pending'" @click="cancelPubTask(t.id)">取消</ElButton>
               </div>
 
               <!-- 预检结果：手机预览下面的独立框 -->
@@ -2406,10 +2426,10 @@ onBeforeUnmount(() => {
 <template v-else-if="props.activeView === 'assets'">
       <div class="asset-toolbar panel">
         <div><span class="section-label">素材中心</span><h2>灵感与配图</h2><p>AI 生成图、机构实拍和历史素材统一管理。</p></div>
-        <div class="filter-tabs">
-          <button v-for="item in ['全部', '上传', 'AI生成', '历史']" :key="item" type="button" :class="{ active: assetFilter === item }" @click="assetFilter = item">{{ item }}</button>
-        </div>
-        <button class="outline-button" type="button" @click="pickUpload"><CloudUpload :size="16" />上传素材</button>
+        <ElRadioGroup v-model="assetFilter" class="filter-tabs">
+          <ElRadioButton v-for="item in assetFilters" :key="item" :label="item">{{ item }}</ElRadioButton>
+        </ElRadioGroup>
+        <ElButton native-type="button" class="outline-button" :loading="assetLoading" :disabled="assetLoading" @click="pickUpload"><CloudUpload :size="16" />上传素材</ElButton>
         <input ref="fileInput" type="file" accept="image/*" multiple style="display:none" @change="onFilesPicked" />
       </div>
 
@@ -2436,7 +2456,7 @@ onBeforeUnmount(() => {
         <aside class="selection-card panel">
           <span class="selection-icon"><Layers3 :size="20" /></span><h3>已选择 {{ selectedAssets.length }} 张</h3><p>选择后的素材可以直接加入当前周内容，也可以交给 AI 作为风格参考。</p>
           <div class="mini-stack"><span v-for="id in selectedAssets.slice(0, 4)" :key="id">{{ id }}</span></div>
-          <ElButton class="module-primary" type="primary" round :disabled="!selectedAssets.length" @click="attachSelected">加入 D3 内容</ElButton>
+          <ElButton class="module-primary" type="primary" round :loading="assetLoading" :disabled="!selectedAssets.length || assetLoading" @click="attachSelected">加入 D3 内容</ElButton>
         </aside>
       </div>
       <!-- R19：AI 生图入口已统一到「内容工坊」右侧单独生图面板（本页只保留素材库：上传 / 管理 / 删除） -->
@@ -2456,7 +2476,10 @@ onBeforeUnmount(() => {
               <h3>内容增长趋势 · 浏览量</h3>
             </div>
             <div class="chart-window">
-              <button v-for="w in ['seven', 'thirty']" :key="w" type="button" :class="['filter-chip', { active: creatorWindow === w }]" @click="creatorWindow = w">{{ w === 'seven' ? '近 7 天' : '近 30 天' }}</button>
+              <ElRadioGroup v-model="creatorWindow" class="chart-window">
+                <ElRadioButton label="seven">近 7 天</ElRadioButton>
+                <ElRadioButton label="thirty">近 30 天</ElRadioButton>
+              </ElRadioGroup>
             </div>
           </div>
           <p v-if="creatorError" class="chart-error">{{ creatorError }}</p>
@@ -2485,9 +2508,9 @@ onBeforeUnmount(() => {
               <template v-else-if="creatorLoading">正在读取平台数据…</template>
               <template v-else>数据来源：小红书创作者中心</template>
             </span>
-            <button class="ghost-mini" type="button" :disabled="collecting" @click="collectToday">
+            <ElButton class="ghost-mini" text native-type="button" :loading="collecting" :disabled="collecting" @click="collectToday">
               <RefreshCw :size="13" />{{ collecting ? '采集中…' : '采集今日数据' }}
-            </button>
+            </ElButton>
           </div>
         </article>
         <article class="topic-rank panel">
@@ -2517,9 +2540,9 @@ onBeforeUnmount(() => {
               <template v-else-if="insight.sources.creatorError"> · 创作者中心未取到：{{ insight.sources.creatorError }}</template>
             </p>
           </div>
-          <button class="outline-button" type="button" :disabled="insightLoading" @click="loadInsight">
+          <ElButton native-type="button" class="outline-button" :loading="insightLoading" :disabled="insightLoading" @click="loadInsight">
             <Sparkles :size="15" />{{ insightLoading ? '解读生成中…' : (insight ? '重新生成' : '生成 AI 解读') }}
-          </button>
+          </ElButton>
         </div>
         <div v-if="insightLoading" class="insight-state">正在结合真实数据生成解读（约 5–15 秒，走真实 AI）…</div>
         <template v-else-if="insight">
@@ -2543,7 +2566,7 @@ onBeforeUnmount(() => {
             <h3>逐篇文章的数据情况</h3>
             <p class="insight-meta">标题 / 日期 / 浏览 / 点赞 / 收藏 / 评论 —— 有则显示，缺则标注「缺」，不用 0 冒充{{ perf && perf.count ? ' · 共 ' + perf.count + ' 篇' : '' }}</p>
           </div>
-          <button class="ghost-mini" type="button" :disabled="perfLoading" @click="loadPerformance"><RefreshCw :size="13" />{{ perfLoading ? '读取中…' : '刷新' }}</button>
+          <ElButton class="ghost-mini" text native-type="button" :loading="perfLoading" :disabled="perfLoading" @click="loadPerformance"><RefreshCw :size="13" />{{ perfLoading ? '读取中…' : '刷新' }}</ElButton>
         </div>
         <div v-if="perfError" class="insight-state bad">{{ perfError }}</div>
         <div v-else-if="perfLoading && !perf" class="insight-state">正在读取逐篇数据…</div>
@@ -2578,8 +2601,8 @@ onBeforeUnmount(() => {
           <p v-if="!report && !reportLoading">按发布后 24/48/72 小时快照做复盘，输出「本期表现 / 与上期对比 / 支柱调整 / 可执行建议」。</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button type="button" :disabled="snapshotBusy" @click="collectSnapshotNow">{{ snapshotBusy ? '采集中…' : '采集快照' }}</button>
-          <button type="button" :disabled="reportLoading" @click="loadReport">{{ reportLoading ? '分析中…' : '生成复盘' }}</button>
+          <ElButton text native-type="button" :loading="snapshotBusy" :disabled="snapshotBusy" @click="collectSnapshotNow">{{ snapshotBusy ? '采集中…' : '采集快照' }}</ElButton>
+          <ElButton text native-type="button" :loading="reportLoading" :disabled="reportLoading" @click="loadReport">{{ reportLoading ? '分析中…' : '生成复盘' }}</ElButton>
         </div>
       </article>
 
@@ -2641,8 +2664,8 @@ onBeforeUnmount(() => {
         <div><span class="section-label">PEER RADAR</span><h2>对标账号监控</h2>
         <p>从热榜结果里聚合出高频出现的作者，分析他们的 6 个维度</p></div>
         <div style="display:flex;gap:10px">
-          <button class="outline-button" type="button" :disabled="compDiscovering" @click="discoverCompetitors">{{ compDiscovering ? '分析中…' : '发现对标账号' }}</button>
-          <button class="outline-button" type="button" @click="loadCompetitors">刷新</button>
+          <ElButton native-type="button" class="outline-button" :loading="compDiscovering" :disabled="compDiscovering" @click="discoverCompetitors">{{ compDiscovering ? '分析中…' : '发现对标账号' }}</ElButton>
+          <ElButton native-type="button" class="outline-button" @click="loadCompetitors">刷新</ElButton>
         </div>
       </article>
 
@@ -2660,7 +2683,7 @@ onBeforeUnmount(() => {
                style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#faf7f3;border-radius:10px;font-size:12px">
             <b>{{ c.nickname }}</b>
             <span style="color:#8b8175">出现 {{ c.notes }} 次 · 热度 {{ c.score }}</span>
-            <button type="button" style="color:#5a8a6a" @click="addCompetitorItem(c)">+ 加入监控</button>
+            <ElButton text native-type="button" style="color:#5a8a6a" :loading="compAddBusy === c.authorId" :disabled="compAddBusy" @click="addCompetitorItem(c)">+ 加入监控</ElButton>
           </div>
         </div>
       </div>
@@ -2681,10 +2704,10 @@ onBeforeUnmount(() => {
             <small style="color:#8b8175">样本 {{ c.sampleSize }} 条 · 总点赞 {{ c.totalLiked }}</small>
           </div>
           <div style="display:flex;gap:8px">
-            <button type="button" :disabled="compDeepBusy === c.id" @click="deepAnalyze(c.id)">
+            <ElButton text native-type="button" :loading="compDeepBusy === c.id" :disabled="compDeepBusy" @click="deepAnalyze(c.id)">
               {{ compDeepBusy === c.id ? '深度分析中…' : '深度分析(补发布时间)' }}
-            </button>
-            <button type="button" style="color:#b4544a" @click="removeCompetitorItem(c.id)">移出</button>
+            </ElButton>
+            <ElButton text native-type="button" style="color:#b4544a" @click="removeCompetitorItem(c.id)">移出</ElButton>
           </div>
         </div>
 
@@ -2719,8 +2742,8 @@ onBeforeUnmount(() => {
         <div><span class="section-label">STRATEGY</span><h2>运营策略</h2>
           <p>AI 生成初稿 → 你可以直接改；也可以跟 AI 对话，让它**真实改这份策略**（改完下面的内容会变）。</p></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="outline-button" type="button" :disabled="strategyBusy" @click="genStrategyDraft">{{ strategyBusy ? '生成中…' : 'AI 生成策略初稿' }}</button>
-          <button class="outline-button" type="button" v-if="strategy" @click="strategyEditing = !strategyEditing">{{ strategyEditing ? '收起编辑' : '手动编辑策略' }}</button>
+          <ElButton native-type="button" class="outline-button" :loading="strategyBusy" :disabled="strategyBusy" @click="genStrategyDraft">{{ strategyBusy ? '生成中…' : 'AI 生成策略初稿' }}</ElButton>
+          <ElButton native-type="button" class="outline-button" v-if="strategy" @click="strategyEditing = !strategyEditing">{{ strategyEditing ? '收起编辑' : '手动编辑策略' }}</ElButton>
         </div>
       </div>
       <p v-if="strategyError" class="panel" style="padding:12px 16px">{{ strategyError }}</p>
@@ -2748,13 +2771,13 @@ onBeforeUnmount(() => {
           <p class="strategy-meta">最后更新：{{ strategy.updatedAt ? strategy.updatedAt.slice(0, 16).replace('T', ' ') : '—' }}（来源：{{ strategy.source === 'ai' ? 'AI 初稿' : strategy.source === 'chat' ? 'AI 对话修改' : '手动编辑' }}）</p>
         </template>
         <template v-else>
-          <label class="studio-field"><span>我们应该怎么做</span><textarea v-model="strategyForm.howTo" rows="5"></textarea></label>
-          <label class="studio-field"><span>多长时间达到什么目标</span><textarea v-model="strategyForm.goals" rows="3"></textarea></label>
+          <label class="studio-field"><span>我们应该怎么做</span><ElInput type="textarea" v-model="strategyForm.howTo" rows="5" /></label>
+          <label class="studio-field"><span>多长时间达到什么目标</span><ElInput type="textarea" v-model="strategyForm.goals" rows="3" /></label>
           <label class="studio-field"><span>分阶段策略（每行一个阶段：阶段名 | 目标 | 选题1、选题2）</span>
-            <textarea v-model="strategyForm.phasesText" rows="6"></textarea></label>
+            <ElInput type="textarea" v-model="strategyForm.phasesText" rows="6" /></label>
           <div class="studio-actions">
-            <button class="outline-button" type="button" :disabled="strategySaving" @click="saveStrategyManual">{{ strategySaving ? '保存中…' : '保存策略' }}</button>
-            <button class="outline-button" type="button" @click="strategyForm = formFromStrategy(strategy); strategyEditing = false">取消</button>
+            <ElButton native-type="button" class="outline-button" :loading="strategySaving" :disabled="strategySaving" @click="saveStrategyManual">{{ strategySaving ? '保存中…' : '保存策略' }}</ElButton>
+            <ElButton native-type="button" class="outline-button" @click="strategyForm = formFromStrategy(strategy); strategyEditing = false">取消</ElButton>
           </div>
         </template>
       </div>
@@ -2765,7 +2788,7 @@ onBeforeUnmount(() => {
         <div class="panel-head">
           <div><span class="section-label">TALK TO AI</span><h3>跟 AI 聊运营方向</h3>
             <p class="pool-note">说清你想怎么调（人群/选题/节奏/目标），它会记着前面说过的，并把结果**真写进上面的策略**。</p></div>
-          <button class="outline-button" type="button" @click="resetChatHistory">清空对话</button>
+          <ElButton native-type="button" class="outline-button" @click="resetChatHistory">清空对话</ElButton>
         </div>
         <div class="chat-list" ref="chatBox">
           <p v-if="!chatItems.length" class="chat-empty">还没有对话。可以先说一句：「这周主打学员改造案例，语气再亲切点」。</p>
@@ -2776,8 +2799,8 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <div class="chat-input">
-          <input v-model="chatDraft" placeholder="例：目标人群收窄到 20-35 岁上班族女生" @keyup.enter="sendChat" />
-          <button class="outline-button" type="button" :disabled="chatSending" @click="sendChat">{{ chatSending ? '思考中…' : '发送' }}</button>
+          <ElInput v-model="chatDraft" placeholder="例：目标人群收窄到 20-35 岁上班族女生" @keyup.enter="sendChat" />
+          <ElButton native-type="button" class="outline-button" :loading="chatSending" :disabled="chatSending" @click="sendChat">{{ chatSending ? '思考中…' : '发送' }}</ElButton>
         </div>
       </div>
 
@@ -2786,17 +2809,17 @@ onBeforeUnmount(() => {
         <div class="panel-head">
           <div><span class="section-label">ACCOUNT SETTINGS</span><h3>人物设定 · 目标人群 · 核心要求</h3>
             <p class="pool-note">{{ blocksSummary }}</p></div>
-          <button class="outline-button" type="button" @click="blocksOpen = !blocksOpen">{{ blocksOpen ? '收起' : '展开修改' }}</button>
+          <ElButton native-type="button" class="outline-button" @click="blocksOpen = !blocksOpen">{{ blocksOpen ? '收起' : '展开修改' }}</ElButton>
         </div>
         <div v-if="blocksOpen" class="blocks-grid">
           <label class="studio-field"><span>人物设定（我是谁 · 什么语气）</span>
-            <textarea v-model="blocks.persona" rows="3" placeholder="例：美妆老师，语气亲切像学姐"></textarea></label>
+            <ElInput type="textarea" v-model="blocks.persona" rows="3" placeholder="例：美妆老师，语气亲切像学姐" /></label>
           <label class="studio-field"><span>目标人群（说给谁听）</span>
-            <textarea v-model="blocks.audience" rows="3" placeholder="例：20-35 岁上班族女生"></textarea></label>
+            <ElInput type="textarea" v-model="blocks.audience" rows="3" placeholder="例：20-35 岁上班族女生" /></label>
           <label class="studio-field"><span>核心要求（卖点 + 转化目标 + 内容要求）</span>
-            <textarea v-model="blocks.selling" rows="3" placeholder="例：主推 1 对 1 体验课；结尾引导评论/私信"></textarea></label>
+            <ElInput type="textarea" v-model="blocks.selling" rows="3" placeholder="例：主推 1 对 1 体验课；结尾引导评论/私信" /></label>
           <div class="studio-actions">
-            <button class="outline-button" type="button" :disabled="blocksSaving" @click="saveBlocks">{{ blocksSaving ? '保存中…' : '保存' }}</button>
+            <ElButton native-type="button" class="outline-button" :loading="blocksSaving" :disabled="blocksSaving" @click="saveBlocks">{{ blocksSaving ? '保存中…' : '保存' }}</ElButton>
             <small>保存后会自动收起，不再占版面。</small>
           </div>
         </div>
@@ -2807,10 +2830,10 @@ onBeforeUnmount(() => {
         <div><span class="section-label">OPERATION PLAN</span><h2>运营计划表 · 账号总纲</h2><p>内容方向的默认依据：无人工干预时，生成的内容跟着它走。</p></div>
         <div style="display:flex;gap:10px;align-items:center">
           <label style="display:flex;align-items:center;gap:6px;font-size:13px">每天发
-            <input v-model.number="postsPerDay" type="number" min="1" max="9" style="width:56px;padding:7px 8px;border:1px solid #e3dcd2;border-radius:8px;text-align:center" />
+            <ElInputNumber v-model="postsPerDay" :min="1" :max="9" controls-position="right" />
             条
           </label>
-          <button class="outline-button" type="button" :disabled="savingPositioning" @click="savePositioning">{{ savingPositioning ? '保存中…' : '保存计划表' }}</button>
+            <ElButton native-type="button" class="outline-button" :loading="savingPositioning" :disabled="savingPositioning" @click="savePositioning">{{ savingPositioning ? '保存中…' : '保存计划表' }}</ElButton>
         </div>
       </div>
       <p v-if="positioningError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ positioningError }}</p>
@@ -2826,7 +2849,7 @@ onBeforeUnmount(() => {
         <div style="display:flex;flex-wrap:wrap;gap:10px">
           <label v-for="(p, i) in pillars" :key="'pl' + i" style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#faf7f3;border-radius:9px;font-size:12px">
             <span>{{ p.name }}</span>
-            <input v-model.number="pillars[i].ratio" type="number" min="0" max="100" style="width:48px;padding:4px 6px;border:1px solid #e3dcd2;border-radius:6px;text-align:center;font-size:12px" />%
+            <ElInputNumber v-model="pillars[i].ratio" :min="0" :max="100" controls-position="right" />%
           </label>
         </div>
         <p style="margin:14px 0 0;font-size:12px;color:#8b8175">每天发 {{ postsPerDay }} 条 → 7 天窗口共需产出 <b>{{ weekTotal }}</b> 篇；之后每天生成 1 次（补第 7 天那批）。</p>
@@ -2869,13 +2892,13 @@ onBeforeUnmount(() => {
           <strong>{{ replyOn ? '已开启 · 命中资料库就自动回' : '已关闭 · 只生成不发送，转人工待办' }}</strong>
           <small>{{ replyOn ? '回复前仍会过：人工介入名单 → 资料库命中 → 禁用词 → 观察期' : '评论照常收集与匹配，你在「系统设置」的待办里逐条确认发送' }}</small>
         </div>
-        <button type="button" :class="['switch-control', { active: replyOn }]" :aria-pressed="replyOn" :disabled="replySaving" @click="toggleReply" aria-label="评论自动回复开关"><i /></button>
+        <ElSwitch :model-value="replyOn" :loading="replySaving" :disabled="replySaving" @change="toggleReply" aria-label="评论自动回复开关" />
       </div>
 
       <div class="panel interaction-panel">
         <div class="panel-head">
           <div><span class="section-label">FEED</span><h3>互动动态</h3></div>
-          <button class="outline-button" type="button" @click="loadInteractionFeed">刷新</button>
+          <ElButton native-type="button" class="outline-button" @click="loadInteractionFeed">刷新</ElButton>
         </div>
         <div class="feed-grid">
           <section class="feed-col">
@@ -2913,8 +2936,8 @@ onBeforeUnmount(() => {
     <template v-else-if="props.activeView === 'library'">
       <div class="library-toolbar panel">
         <div><span class="section-label">历史内容资产</span><h2>文案库 · {{ libraryRows.length }} 篇</h2><p>已发布、草稿和排期内容都会参与语义查重。</p></div>
-        <label class="search-field"><Search :size="16" /><input v-model="libraryQuery" type="search" placeholder="搜索标题、来源或状态"></label>
-        <button class="outline-button" type="button" :disabled="importing" @click="importHistory"><FileText :size="16" />{{ importing ? '导入中…' : '从我的小红书导入' }}</button>
+        <label class="search-field"><Search :size="16" /><ElInput v-model="libraryQuery" type="search" placeholder="搜索标题、来源或状态" /></label>
+        <ElButton native-type="button" class="outline-button" :loading="importing" :disabled="importing" @click="importHistory"><FileText :size="16" />{{ importing ? '导入中…' : '从我的小红书导入' }}</ElButton>
       </div>
       <p v-if="libraryError" class="panel" style="padding:12px 16px;margin:0 0 12px">{{ libraryError }}</p>
       <p v-else-if="libraryLoading" class="panel" style="padding:12px 16px;margin:0 0 12px">正在读取文案库…</p>
@@ -2933,8 +2956,8 @@ onBeforeUnmount(() => {
           <p>上传文档（docx / pdf / txt / md）→ 服务端解析成 AI 能用的知识条目 → **评论回复只能靠它回答**，不许乱编。</p></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <input ref="docInput" type="file" multiple accept=".docx,.pdf,.txt,.md" style="display:none" @change="onDocsPicked" />
-          <button class="outline-button" type="button" :disabled="docUploading" @click="pickDocs">{{ docUploading ? '解析中…（PDF 稍慢）' : '上传文档' }}</button>
-          <button class="outline-button" type="button" @click="loadLibraryDocs">刷新</button>
+          <ElButton native-type="button" class="outline-button" :loading="docUploading" :disabled="docUploading" @click="pickDocs">{{ docUploading ? '解析中…（PDF 稍慢）' : '上传文档' }}</ElButton>
+          <ElButton native-type="button" class="outline-button" @click="loadLibraryDocs">刷新</ElButton>
         </div>
       </div>
       <p v-if="docError" class="panel" style="padding:12px 16px">{{ docError }}</p>
@@ -2965,8 +2988,8 @@ onBeforeUnmount(() => {
           <b>命中自测（验收用）</b>
           <small>输入一句客户可能问的话，看能不能从资料里命中 —— 命中才可能被正确回复。</small>
           <div class="chat-input">
-            <input v-model="matchProbe" placeholder="例：体验课多少钱 / 怎么预约" @keyup.enter="runMatchProbe" />
-            <button class="outline-button" type="button" :disabled="matchProbing" @click="runMatchProbe">{{ matchProbing ? '匹配中…' : '测一下' }}</button>
+            <ElInput v-model="matchProbe" placeholder="例：体验课多少钱 / 怎么预约" @keyup.enter="runMatchProbe" />
+            <ElButton native-type="button" class="outline-button" :loading="matchProbing" :disabled="matchProbing" @click="runMatchProbe">{{ matchProbing ? '匹配中…' : '测一下' }}</ElButton>
           </div>
           <div v-if="matchResult" class="match-result">
             <b :style="matchResult.matched ? 'color:#5a8a6a' : 'color:#b4544a'">
@@ -2987,16 +3010,16 @@ onBeforeUnmount(() => {
         <article class="setting-panel panel account-card">
           <div class="panel-head compact">
             <div><span class="section-label">XIAOHONGSHU</span><h3>小红书账号</h3></div>
-            <span :class="['conn-state', loginState.loggedIn ? 'ok' : 'bad']">{{ !loginState.service ? '服务未启动' : (loginState.unknown ? '检测中…' : (loginState.loggedIn ? '已登录' : '未登录')) }}</span>
+            <span :class="['conn-state', loginState.loggedIn ? 'ok' : 'bad']">{{ loginState.unknown ? (statusChecking ? '检测中…' : '状态待确认') : (loginState.loggedIn ? '已登录' : '未登录') }}</span>
           </div>
           <div class="acc-body">
             <div class="acc-info">
-              <b>{{ loginState.unknown ? '正在读取登录态…' : (loginState.loggedIn ? (loginState.username || '已登录账号') : '还没有登录') }}</b>
+              <b>{{ loginState.unknown ? (statusChecking ? '正在读取登录态…' : '暂时无法确认登录状态') : (loginState.loggedIn ? (loginState.username || '已登录账号') : '还没有登录') }}</b>
               <small>{{ loginState.loggedIn ? '授权存在本机；换号点「切换账号（扫码）」（会先退出当前账号）' : '扫码后系统才能发内容、读评论' }}</small>
               <div class="acc-actions">
-                <button class="outline-button slim" type="button" :disabled="scanBusy" @click="switchAccount">{{ scanBusy ? '处理中…' : (loginState.loggedIn ? '切换账号（扫码）' : '扫码登录') }}</button>
-                <button class="outline-button slim" type="button" @click="refreshLoginStatus">刷新状态</button>
-                <button v-if="loginState.loggedIn" class="outline-button slim danger" type="button" :disabled="scanBusy" @click="logoutAccount">退出登录</button>
+                <ElButton native-type="button" class="outline-button slim" :loading="scanBusy || qrLoading" :disabled="scanBusy || qrLoading" @click="switchAccount">{{ scanBusy ? '处理中…' : (loginState.loggedIn ? '切换账号（扫码）' : '扫码登录') }}</ElButton>
+                <ElButton native-type="button" class="outline-button slim" :loading="statusChecking" :disabled="scanBusy || qrLoading" @click="checkLoginNow">我已扫码，检测登录</ElButton>
+                <ElButton native-type="button" v-if="loginState.loggedIn" class="outline-button slim danger" :disabled="scanBusy" @click="logoutAccount">退出登录</ElButton>
               </div>
               <p v-if="scanMsg" class="acc-msg">{{ scanMsg }}</p>
             </div>
@@ -3016,13 +3039,13 @@ onBeforeUnmount(() => {
             <span :class="['conn-state', ds.ready ? 'ok' : 'bad']">{{ ds.ready ? '已配置' : '未配置' }}</span>
           </div>
           <label class="studio-field"><span>API Key（{{ ds.keyMasked || '未填' }}）</span>
-            <input v-model="keyForm.deepseekKey" type="password" placeholder="sk-…（粘贴后点右侧保存并检查）" /></label>
+            <ElInput v-model="keyForm.deepseekKey" type="password" placeholder="sk-…（粘贴后点右侧保存并检查）" /></label>
           <div class="key-row">
-            <label class="studio-field"><span>Base（可留空用官方）</span><input v-model="keyForm.deepseekBase" :placeholder="ds.base || 'https://api.deepseek.com'" /></label>
-            <label class="studio-field"><span>模型</span><input v-model="keyForm.deepseekModel" :placeholder="ds.model || 'deepseek-chat'" /></label>
+            <label class="studio-field"><span>Base（可留空用官方）</span><ElInput v-model="keyForm.deepseekBase" :placeholder="ds.base || 'https://api.deepseek.com'" /></label>
+            <label class="studio-field"><span>模型</span><ElInput v-model="keyForm.deepseekModel" :placeholder="ds.model || 'deepseek-chat'" /></label>
           </div>
           <div class="acc-actions">
-            <button class="outline-button" type="button" :disabled="keyBusy" @click="saveAndTest('deepseek')">{{ keyBusy === 'deepseek' ? '检查中…' : '保存并检查' }}</button>
+                <ElButton native-type="button" class="outline-button" :loading="keyBusy === 'deepseek'" :disabled="keyBusy" @click="saveAndTest('deepseek')">{{ keyBusy === 'deepseek' ? '检查中…' : '保存并检查' }}</ElButton>
             <span v-if="keyResult.deepseek" :class="['key-result', keyResult.deepseek.ok ? 'ok' : 'bad']">
               {{ keyResult.deepseek.ok ? `✅ 可用（${keyResult.deepseek.ms}ms）` : '❌ ' + (keyResult.deepseek.error || '不可用') }}
             </span>
@@ -3036,12 +3059,12 @@ onBeforeUnmount(() => {
             <span :class="['conn-state', img.ready ? 'ok' : 'bad']">{{ img.ready ? '已配置' : '未配置' }}</span>
           </div>
           <label class="studio-field"><span>渠道</span>
-            <select v-model="keyForm.imageProvider">
-              <option v-for="p in (img.providers || [])" :key="p.key" :value="p.key">{{ p.name }}（{{ p.model }}）</option>
-            </select></label>
+            <ElSelect v-model="keyForm.imageProvider" placeholder="选择渠道">
+              <ElOption v-for="p in (img.providers || [])" :key="p.key" :value="p.key" :label="`${p.name}（${p.model}）`" />
+            </ElSelect></label>
           <label class="studio-field"><span>API Key（{{ img.keyMasked || '未填' }}）</span>
-            <input v-model="keyForm.imageKey" type="password" placeholder="粘贴生图渠道 Key" /></label>
-          <label class="studio-field"><span>Base URL</span><input v-model="keyForm.imageBase" :placeholder="img.base || 'https://www.apikiki.com'" /></label>
+            <ElInput v-model="keyForm.imageKey" type="password" placeholder="粘贴生图渠道 Key" /></label>
+          <label class="studio-field"><span>Base URL</span><ElInput v-model="keyForm.imageBase" :placeholder="img.base || 'https://www.apikiki.com'" /></label>
           <div class="tier-table">
             <b>这个渠道能出多大（真实像素，不是宣传词）</b>
             <span v-for="t in (img.tiers ? Object.values(img.tiers) : [])" :key="t.key">
@@ -3050,8 +3073,8 @@ onBeforeUnmount(() => {
             <small class="tier-note">⚠️ qweapi 的 gpt-image 系最高 1K（生不了 2K/4K）；image2.5 需先在渠道方开通，否则会 404。</small>
           </div>
           <div class="acc-actions">
-            <button class="outline-button" type="button" :disabled="keyBusy" @click="saveAndTest('image')">{{ keyBusy === 'image' ? '检查中…' : '保存并检查' }}</button>
-            <button class="outline-button" type="button" :disabled="shotBusy" @click="runTestShot">{{ shotBusy ? '出图中…（约60-90秒）' : '试出一张' }}</button>
+            <ElButton native-type="button" class="outline-button" :loading="keyBusy === 'image'" :disabled="keyBusy" @click="saveAndTest('image')">{{ keyBusy === 'image' ? '检查中…' : '保存并检查' }}</ElButton>
+            <ElButton native-type="button" class="outline-button" :loading="shotBusy" :disabled="shotBusy" @click="runTestShot">{{ shotBusy ? '出图中…（约60-90秒）' : '试出一张' }}</ElButton>
           </div>
           <p v-if="keyResult.image" :class="['key-result', keyResult.image.ok ? 'ok' : 'bad']">
             {{ keyResult.image.ok ? '✅ ' + (keyResult.image.note || 'Key 有效') : '❌ ' + (keyResult.image.error || '不可用') }}
@@ -3069,19 +3092,19 @@ onBeforeUnmount(() => {
           </div>
           <div class="setting-rows">
             <div><span><b>发布前人工确认</b><small>开 = 到点先转「待确认」，你点确认才发（无人值守发布会自动关）</small></span>
-              <button type="button" :class="['switch-control', { active: !guard.autoSend }]" :disabled="guardSaving" @click="toggleGuard('autoSend')"><i /></button></div>
+              <ElSwitch :model-value="!guard.autoSend" :loading="guardSaving" :disabled="guardSaving" @change="toggleGuard('autoSend')" /></div>
             <div><span><b>相似度超限自动重写</b><small>达到 60% 门禁时自动重写（最多 3 次）；关掉就直接落库但仍记录相似度</small></span>
-              <button type="button" :class="['switch-control', { active: guard.dedupeRewrite }]" :disabled="guardSaving" @click="toggleGuard('dedupeRewrite')"><i /></button></div>
+              <ElSwitch :model-value="guard.dedupeRewrite" :loading="guardSaving" :disabled="guardSaving" @change="toggleGuard('dedupeRewrite')" /></div>
             <div><span><b>允许无人值守发布</b><small>开 = 到点无需询问，系统直接发送</small></span>
-              <button type="button" :class="['switch-control', { active: guard.autoSend }]" :disabled="guardSaving" @click="toggleGuard('autoSend')"><i /></button></div>
+              <ElSwitch :model-value="guard.autoSend" :loading="guardSaving" :disabled="guardSaving" @change="toggleGuard('autoSend')" /></div>
             <div><span><b>发布保护（五项预检）</b><small>登录态 / 查重 / 配图 / 正文 / 发布间隔，全过才发</small></span>
-              <button type="button" :class="['switch-control', { active: guard.protect }]" :disabled="guardSaving" @click="toggleGuard('protect')"><i /></button></div>
+              <ElSwitch :model-value="guard.protect" :loading="guardSaving" :disabled="guardSaving" @change="toggleGuard('protect')" /></div>
           </div>
         </article>
       </div>
 
       <div class="settings-grid" style="margin-top:16px">
-        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>{{ envOsText }}</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><button class="outline-button full" type="button" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</button></article>
+        <article class="setting-panel panel"><div class="panel-head"><div><span class="section-label">LOCAL DEPLOYMENT</span><h3>本地运行环境</h3></div><ServerCog :size="19" /></div><div class="environment-list"><span><Check :size="14" /><b>系统环境</b><small>{{ envOsText }}</small></span><span><Check :size="14" /><b>服务组件</b><small>已安装</small></span><span><Check :size="14" /><b>数据目录</b><small>可读写</small></span><span><Check :size="14" /><b>定时任务</b><small>服务正常</small></span></div><ElButton native-type="button" class="outline-button full" @click="recheckEnv"><RefreshCw :size="15" />重新检测环境</ElButton></article>
       </div>
 
       <!-- ============ 评论自动回复（保留） ============ -->
@@ -3089,8 +3112,8 @@ onBeforeUnmount(() => {
         <div><span class="section-label">COMMENT AUTO-REPLY</span><h2>评论自动回复</h2>
         <p>后台每 5 分钟纯规则轮询；<b>命中知识库才用 AI 生成回复</b>，未命中一律进人工待办（不瞎回）</p></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button class="outline-button" type="button" :disabled="commentBusy" @click="pollCommentsNow">{{ commentBusy ? '处理中…' : '立即跑一轮' }}</button>
-          <button class="outline-button" type="button" @click="loadComments">刷新</button>
+          <ElButton native-type="button" class="outline-button" :loading="commentBusy" :disabled="commentBusy" @click="pollCommentsNow">{{ commentBusy ? '处理中…' : '立即跑一轮' }}</ElButton>
+          <ElButton native-type="button" class="outline-button" @click="loadComments">刷新</ElButton>
         </div>
       </article>
 
@@ -3111,7 +3134,9 @@ onBeforeUnmount(() => {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
           <b style="font-size:13px">评论处理</b>
           <div style="display:flex;gap:6px">
-            <button v-for="f in [['pending_review','待人工'],['auto','自动'],['manual','人工'],['skipped','已跳过'],['','全部']]" :key="'cf'+f[0]" type="button" :style="commentFilter === f[0] ? 'color:#b4544a' : ''" @click="switchCommentFilter(f[0])">{{ f[1] }}</button>
+            <ElRadioGroup v-model="commentFilter" class="filter-tabs" @change="switchCommentFilter">
+              <ElRadioButton v-for="f in [['pending_review','待人工'],['auto','自动'],['manual','人工'],['skipped','已跳过'],['','全部']]" :key="'cf'+f[0]" :label="f[0]">{{ f[1] }}</ElRadioButton>
+            </ElRadioGroup>
           </div>
         </div>
         <div v-if="!commentList.length" style="color:#8b8175;font-size:13px">没有该状态的评论记录</div>
@@ -3126,12 +3151,12 @@ onBeforeUnmount(() => {
             <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
               <span :class="['queue-state', { waiting: c.reply_status === 'pending_review' }]">{{ COMMENT_STATE[c.reply_status] || c.reply_status }}</span>
               <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-                <button v-if="!c.replied && c.reply_text" type="button" style="color:#5a8a6a" @click="approveReply(c)">通过并发送</button>
-                <button type="button" @click="addTakeoverByUser(c)">暂停该用户自动回复</button>
+                <ElButton v-if="!c.replied && c.reply_text" text native-type="button" style="color:#5a8a6a" :loading="replyActionBusy === c.id" :disabled="replyActionBusy" @click="approveReply(c)">通过并发送</ElButton>
+                <ElButton text native-type="button" @click="addTakeoverByUser(c)">暂停该用户自动回复</ElButton>
               </div>
               <div v-if="!c.replied" style="display:flex;gap:6px;margin-top:2px">
-                <input v-model="manualReplyText[c.id]" placeholder="人工回复内容" style="padding:6px 9px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px;width:170px" />
-                <button type="button" @click="sendManualReply(c)">发送</button>
+                <ElInput v-model="manualReplyText[c.id]" placeholder="人工回复内容" style="padding:6px 9px;border:1px solid #e3dcd2;border-radius:8px;font-size:12px;width:170px" />
+                <ElButton text native-type="button" :loading="manualReplyBusy === c.id" :disabled="manualReplyBusy" @click="sendManualReply(c)">发送</ElButton>
               </div>
             </div>
           </div>
@@ -3147,13 +3172,13 @@ onBeforeUnmount(() => {
             没单独设置时<b>自动继承运营大纲</b>{{ personaCard && personaCard.inheritedFrom ? '（当前：继承中）' : '' }}，不会两边打架。
           </p>
           <div v-if="personaCard" style="display:flex;flex-direction:column;gap:8px;font-size:13px">
-            <label class="studio-field"><span>称呼</span><input v-model="personaCard.name" /></label>
-            <label class="studio-field"><span>角色定位</span><input v-model="personaCard.role" /></label>
-            <label class="studio-field"><span>回复语气</span><input v-model="personaCard.tone" /></label>
-            <label class="studio-field"><span>禁忌（逗号分隔）</span><input :value="(personaCard.taboo || []).join('、')" @input="personaCard.taboo = $event.target.value.split(/[、,，]/).filter(Boolean)" /></label>
+            <label class="studio-field"><span>称呼</span><ElInput v-model="personaCard.name" /></label>
+            <label class="studio-field"><span>角色定位</span><ElInput v-model="personaCard.role" /></label>
+            <label class="studio-field"><span>回复语气</span><ElInput v-model="personaCard.tone" /></label>
+            <label class="studio-field"><span>禁忌（逗号分隔）</span><ElInput :model-value="(personaCard.taboo || []).join('、')" @update:model-value="personaCard.taboo = $event.split(/[、,，]/).filter(Boolean)" /></label>
             <div class="acc-actions">
-              <button class="outline-button" type="button" @click="savePersonaCard">保存回复人设</button>
-              <button class="outline-button" type="button" @click="resetPersonaCard">恢复继承运营大纲</button>
+              <ElButton native-type="button" class="outline-button" @click="savePersonaCard">保存回复人设</ElButton>
+              <ElButton native-type="button" class="outline-button" @click="resetPersonaCard">恢复继承运营大纲</ElButton>
             </div>
           </div>
         </article>
@@ -3161,10 +3186,10 @@ onBeforeUnmount(() => {
         <article class="setting-panel panel">
           <div class="panel-head"><div><span class="section-label">FORBIDDEN</span><h3>禁用词表（{{ forbiddenCount }} 个）</h3></div></div>
           <p class="pool-note">已内置一套**专业词表**（广告法绝对化用语 / 医疗违规 / 引流私加 / 贬低同行）。命中任一 → 转人工，不自动发。可直接改、可加。</p>
-          <textarea v-model="forbiddenText" rows="7" class="forbidden-box" placeholder="每行或空格分隔一个词"></textarea>
+          <ElInput type="textarea" v-model="forbiddenText" rows="7" class="forbidden-box" placeholder="每行或空格分隔一个词" />
           <div class="acc-actions">
-            <button class="outline-button" type="button" @click="saveForbidden">保存禁用词</button>
-            <button class="outline-button" type="button" @click="loadDefaultForbidden">载入专业词表（默认）</button>
+            <ElButton native-type="button" class="outline-button" @click="saveForbidden">保存禁用词</ElButton>
+            <ElButton native-type="button" class="outline-button" @click="loadDefaultForbidden">载入专业词表（默认）</ElButton>
           </div>
         </article>
       </div>
@@ -3175,7 +3200,7 @@ onBeforeUnmount(() => {
           <p>两条路把知识喂进来：① 上传文档，AI 自动提炼成能用的问答条目；② 直接跟 AI 对话，把店里的实际情况说清楚，它帮你写条目。</p></div>
         <div class="acc-actions">
           <input ref="docInput2" type="file" multiple accept=".docx,.pdf,.txt,.md" style="display:none" @change="onDocsPicked" />
-          <button class="outline-button" type="button" :disabled="docUploading" @click="pickDocs">{{ docUploading ? '解析中…' : '上传文档' }}</button>
+          <ElButton native-type="button" class="outline-button" :loading="docUploading" :disabled="docUploading" @click="pickDocs">{{ docUploading ? '解析中…' : '上传文档' }}</ElButton>
         </div>
       </div>
       <p v-if="docMsg" class="panel" style="padding:12px 16px;border-color:#b9d3c1">{{ docMsg }}</p>
@@ -3193,16 +3218,16 @@ onBeforeUnmount(() => {
                 <small>{{ d.status === 'ok' ? `${d.chars} 字` : '解析失败：' + (d.note || '') }}</small>
               </span>
               <span class="doc-actions">
-                <button type="button" :disabled="analyzeBusy === d.id" @click="runAnalyze(d)">{{ analyzeBusy === d.id ? 'AI 提炼中…' : 'AI 提炼' }}</button>
-                <button type="button" style="color:#b4544a" @click="removeDoc(d)">删除</button>
+                <ElButton text native-type="button" :loading="analyzeBusy === d.id" :disabled="analyzeBusy" @click="runAnalyze(d)">{{ analyzeBusy === d.id ? 'AI 提炼中…' : 'AI 提炼' }}</ElButton>
+                <ElButton text native-type="button" style="color:#b4544a" @click="removeDoc(d)">删除</ElButton>
               </span>
             </article>
           </div>
           <div class="doc-test">
             <b>命中自测</b><small>输入客户可能问的话，看能不能从知识里命中</small>
             <div class="chat-input">
-              <input v-model="matchProbe" placeholder="例：体验课多少钱" @keyup.enter="runMatchProbe" />
-              <button class="outline-button" type="button" :disabled="matchProbing" @click="runMatchProbe">测一下</button>
+              <ElInput v-model="matchProbe" placeholder="例：体验课多少钱" @keyup.enter="runMatchProbe" />
+              <ElButton native-type="button" class="outline-button" :disabled="matchProbing" @click="runMatchProbe">测一下</ElButton>
             </div>
             <div v-if="matchResult" class="match-result">
               <b :style="matchResult.matched ? 'color:#5a8a6a' : 'color:#b4544a'">{{ matchResult.matched ? `✅ 命中（${matchResult.score} 分 · 来源：${matchResult.source === 'library' || matchResult.source === 'library_ai' ? '资料库' : matchResult.source === 'chat' ? 'AI 对话' : '手工'}）` : '❌ 没命中 —— 不会乱回，转人工待办' }}</b>
@@ -3214,7 +3239,7 @@ onBeforeUnmount(() => {
         <!-- ② 对话补全知识 -->
         <article class="setting-panel panel outline-chat" style="padding:16px 18px">
           <div class="panel-head"><div><span class="section-label">TALK TO AI</span><h3>② 跟 AI 补全知识库</h3></div>
-            <button class="outline-button" type="button" @click="resetKnowledgeChat">清空对话</button></div>
+            <ElButton native-type="button" class="outline-button" @click="resetKnowledgeChat">清空对话</ElButton></div>
           <div class="chat-list" style="max-height:260px">
             <p v-if="!kbChat.length" class="chat-empty">例：「体验课 199 元 90 分钟，可美团预约，不退款」—— 说清事实，AI 会写成客户问得出来的问答条目。</p>
             <div v-for="m in kbChat" :key="'kc' + m.id" :class="['chat-msg', m.role]">
@@ -3224,8 +3249,8 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="chat-input">
-            <input v-model="kbDraft" placeholder="把店里的实际情况说给 AI（价格/时长/预约方式等）" @keyup.enter="sendKnowledgeChat" />
-            <button class="outline-button" type="button" :disabled="kbSending" @click="sendKnowledgeChat">{{ kbSending ? '整理中…' : '发送' }}</button>
+            <ElInput v-model="kbDraft" placeholder="把店里的实际情况说给 AI（价格/时长/预约方式等）" @keyup.enter="sendKnowledgeChat" />
+            <ElButton native-type="button" class="outline-button" :loading="kbSending" :disabled="kbSending" @click="sendKnowledgeChat">{{ kbSending ? '整理中…' : '发送' }}</ElButton>
           </div>
         </article>
       </div>
@@ -3235,7 +3260,9 @@ onBeforeUnmount(() => {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
           <b style="font-size:13px">知识条目（{{ kbEntries.length }} 条 · 自动回复只从这里取答案）</b>
           <div class="acc-actions">
-            <button v-for="f in [['','全部'],['library_ai','文档提炼'],['chat','AI 对话'],['manual','手工']]" :key="'kf'+f[0]" type="button" :style="kbFilter === f[0] ? 'color:#b4544a;font-weight:700' : ''" @click="kbFilter = f[0]; loadKbEntries()">{{ f[1] }}</button>
+            <ElRadioGroup v-model="kbFilter" class="filter-tabs" @change="loadKbEntries">
+              <ElRadioButton v-for="f in [['','全部'],['library_ai','文档提炼'],['chat','AI 对话'],['manual','手工']]" :key="'kf'+f[0]" :label="f[0]">{{ f[1] }}</ElRadioButton>
+            </ElRadioGroup>
           </div>
         </div>
         <p v-if="!kbEntries.length" style="color:#8b8175;font-size:13px;margin-top:10px">还没有知识条目 —— 不添加就永远不会自动回复（这是设计，不是 bug）。</p>
@@ -3246,7 +3273,7 @@ onBeforeUnmount(() => {
             <div class="kb-ans">{{ k.answer }}</div>
             <div class="kb-kw">关键词：{{ (k.keywords || []).join('、') }}</div>
           </div>
-          <button type="button" style="color:#b4544a" @click="removeKbEntry(k)">删除</button>
+          <ElButton text native-type="button" style="color:#b4544a" @click="removeKbEntry(k)">删除</ElButton>
         </div>
       </div>
 

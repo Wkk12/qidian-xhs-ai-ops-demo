@@ -40,7 +40,7 @@ export const api = {
   health: () => req('/health'),
 
   // MCP 服务与账号
-  mcpStatus: () => req('/mcp/status'),
+  mcpStatus: ({ pending = false } = {}) => req(`/mcp/status${pending ? '?pending=1' : ''}`, { signal: AbortSignal.timeout(40000), cache: 'no-store' }),
   mcpQrcode: () => req('/mcp/qrcode'),
   me: () => req('/mcp/me'),
 

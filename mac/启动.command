@@ -10,7 +10,12 @@
 set -u
 
 cd "$(dirname "$0")" || exit 1
+# 源码目录中本文件位于 mac/；交付包里则位于根目录。
+if [ ! -d server ] && [ -d ../server ]; then cd .. || exit 1; fi
 ROOT="$(pwd)"
+export XHS_COOKIE_FILE="${XHS_COOKIE_FILE:-$ROOT/data/cookies.json}"
+export COOKIES_PATH="$XHS_COOKIE_FILE"
+mkdir -p "$(dirname "$COOKIES_PATH")"
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/启动.log"
@@ -58,7 +63,9 @@ fi
 
 # ---------- 3. 起小红书连接服务（MCP）----------
 MCP_BIN=""
-for f in mcp/xiaohongshu-mcp-darwin-arm64 mcp/xiaohongshu-mcp-darwin-amd64 mcp/xiaohongshu-mcp; do
+MCP_ARCH="$(uname -m)"
+[ "$MCP_ARCH" != x86_64 ] || MCP_ARCH=amd64
+for f in ".runtime/xiaohongshu-mcp-darwin-$MCP_ARCH" "mcp/xiaohongshu-mcp-darwin-$MCP_ARCH" mcp/xiaohongshu-mcp; do
   [ -f "$f" ] && MCP_BIN="$f" && break
 done
 

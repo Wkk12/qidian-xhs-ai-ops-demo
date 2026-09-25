@@ -86,8 +86,8 @@ async function call(pathname, { method = 'GET', body, params, timeout } = {}) {
 }
 
 export const mcp = {
-  health: () => call('/health'),
-  loginStatus: () => call('/api/v1/login/status'),
+  health: () => call('/health', { timeout: 5000 }),
+  loginStatus: () => call('/api/v1/login/status', { timeout: 30000 }),
   loginQrcode: () => call('/api/v1/login/qrcode'),
   clearCookies: () => call('/api/v1/login/cookies', { method: 'DELETE' }),
   me: () => call('/api/v1/user/me'),

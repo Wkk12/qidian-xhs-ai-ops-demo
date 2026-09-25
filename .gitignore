@@ -9,6 +9,8 @@ server/.env
 
 # 数据与素材
 server/data/
+/data/cookies.json
+/.runtime/
 
 # 备份快照与临时产物（不入库）
 .backup*/
