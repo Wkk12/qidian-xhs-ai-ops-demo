@@ -2,6 +2,9 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+REM 新版本会去读「项目内 data\cookies.json」；本机 MCP 的凭据在用户目录，这里显式指过去（只在本机生效）
+if not defined XHS_COOKIE_FILE set "XHS_COOKIE_FILE=%USERPROFILE%\xiaohongshu-mcp-go\cookies.json"
+
 echo ============================================
 echo   绮点 AI 小红书运营平台
 echo ============================================
