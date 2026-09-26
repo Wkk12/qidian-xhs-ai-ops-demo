@@ -41,7 +41,24 @@ scripts/                  # 工具脚本（交付、密钥清理、推送）
 ```bat
 双击 启动.bat
 ```
+`启动.bat` 会依次拉起：① 连接服务（小红书 MCP，18060；没在跑才启动）② 本地服务（8787）③ 兼容地址（5199），并打开浏览器。
 服务起在 `http://127.0.0.1:8787`，浏览器打开即用。
+
+**Windows 首次配置（凭据 & 修复版 MCP）**
+```bat
+REM 1) 凭据：本地服务与 MCP 共用项目内这一份（不入库）
+REM    启动.bat 已自动设置 XHS_COOKIE_FILE=<项目>\data\cookies.json
+REM    若 MCP 由别处启动，请一并给它 COOKIES_PATH= 同一路径
+
+REM 2) 修复版 MCP（带扫码会话修复）：装 Go 1.24 → 打补丁 → 编译到 .runtime\
+git -C <xiaohongshu-mcp 检出> apply patches/mcp-login-session.patch
+go test . -run TestLoginSession -count=1
+go build -o "<项目>\.runtime\xiaohongshu-mcp-windows-amd64.exe" .
+REM 之后 scripts\start-mcp-local.bat 会优先使用 .runtime\ 里的这一版
+```
+> macOS 的对应流程见 `docs/login-session-fix.md`（Wkk 提供，基线提交 6583124）。
+> MCP 访问小红书需要代理（默认 `http://127.0.0.1:7890`）。
+
 
 **手动/开发**
 ```bash
